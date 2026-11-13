@@ -764,6 +764,8 @@ async function runLiveFullPage() {
     );
     check('repeating page chrome is tagged', capture.hidden >= 1);
 
+    console.log('tile offsets:', tiles.map((tile) => tile.offset).join(', '));
+
     const result = await panel.evaluate(async (input) => {
       const output = await window.__sttDebug.runTiledPipeline(
         input,
@@ -803,6 +805,34 @@ async function runLiveFullPage() {
         missing: result.missing,
         duplicated: result.duplicated,
       });
+      const perTile = await panel.evaluate(async (input) => {
+        const summary = [];
+        for (const tile of input.tiles) {
+          const output = await window.__sttDebug.runTiledPipeline(
+            { ...input, tiles: [tile] },
+            { compact: true, maxWidth: 2400 },
+            () => {},
+            () => false,
+          );
+          const numbers = [...output.markdown.matchAll(/Paragraph (\d{2})/g)].map(
+            (match) => match[1],
+          );
+          summary.push({
+            offset: tile.offset,
+            count: numbers.length,
+            first: numbers[0],
+            last: numbers[numbers.length - 1],
+            numbers: numbers.join(' '),
+          });
+        }
+        return summary;
+      }, {
+        tiles,
+        dpr: capture.dpr,
+        scrollHeight: capture.scrollHeight,
+        viewportWidth: capture.viewportWidth,
+      });
+      for (const tile of perTile) console.error('tile', JSON.stringify(tile));
     }
 
     check('a five-tile page comes back whole', result.unique === 70 && result.count === 70);
