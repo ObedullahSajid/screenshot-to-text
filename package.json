@@ -1,0 +1,39 @@
+{
+  "name": "screenshot-to-text",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "On-device OCR that turns screenshots into layout-preserving Markdown for AI agents.",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "prepare": "wxt prepare",
+    "assets": "node scripts/copy-assets.mjs",
+    "predev": "node scripts/copy-assets.mjs",
+    "prebuild": "node scripts/copy-assets.mjs",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "node scripts/e2e.mjs",
+    "check:offline": "node scripts/check-offline.mjs",
+    "benchmark": "node scripts/benchmark.mjs",
+    "store:shots": "node scripts/store-shots.mjs",
+    "verify": "npm run typecheck && npm run build && npm run check:offline && npm run test:e2e",
+    "debug:layout": "node scripts/debug-layout.mjs"
+  },
+  "dependencies": {
+    "@tesseract.js-data/eng": "^1.0.0",
+    "gpt-tokenizer": "^4.1.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.9",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@wxt-dev/module-react": "^1.2.2",
+    "puppeteer-core": "^25.17.0",
+    "typescript": "^7.0.2",
+    "wxt": "^0.21.5"
+  }
+}
