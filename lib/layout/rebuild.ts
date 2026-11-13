@@ -688,6 +688,8 @@ function unfence(markdown: string): string {
 interface Table {
   kind: 'table';
   paragraphs: Set<OcrParagraph>;
+  /** Source lines the grid actually covers, so nothing is silently dropped. */
+  lines: Set<OcrLine>;
   rows: string[][];
 }
 
@@ -695,6 +697,8 @@ interface Table {
 interface ColumnRun {
   kind: 'columns';
   paragraphs: Set<OcrParagraph>;
+  /** Source lines the grid actually covers, so nothing is silently dropped. */
+  lines: Set<OcrLine>;
   /** One entry per visual column, each holding that column's cells in order. */
   columns: OcrWord[][][];
 }
@@ -778,32 +782,52 @@ function detectLayouts(
   const tolerance = Math.max(medianHeight * 2, 24);
   let run: TableLine[] = [];
 
+  // Tesseract sometimes puts twenty-plus paragraphs in one paragraph. A run can
+  // then cover only a few of those lines, and claiming the paragraph would make
+  // the rest vanish when the grid is rendered. Grids may only claim paragraphs
+  // they cover completely; a partially covered paragraph stays prose.
+  const lineTotals = new Map<OcrParagraph, number>();
+  for (const entry of entries) lineTotals.set(entry.paragraph, entry.lines.length);
+
   const flush = () => {
-    if (run.length >= 2) {
-      const columnCount = Math.max(...run.map((row) => row.cells.length));
+    const covered = new Map<OcrParagraph, number>();
+    for (const row of run) {
+      covered.set(row.paragraph, (covered.get(row.paragraph) ?? 0) + 1);
+    }
+    const complete = run.filter(
+      (row) => covered.get(row.paragraph) === lineTotals.get(row.paragraph),
+    );
+
+    if (complete.length >= 2) {
+      const columnCount = Math.max(...complete.map((row) => row.cells.length));
       if (columnCount >= 2 && columnCount <= 8) {
-        const paragraphs = new Set(run.map((row) => row.paragraph));
-        if (looksLikeColumns(run)) {
+        const paragraphs = new Set(complete.map((row) => row.paragraph));
+        const lines = new Set(complete.map((row) => row.line));
+        if (looksLikeColumns(complete)) {
           const columns: OcrWord[][][] = [];
           for (let index = 0; index < columnCount; index++) {
             columns.push(
-              run.map((row) => row.cells[index] ?? []).filter((cell) => cell.length > 0),
+              complete
+                .map((row) => row.cells[index] ?? [])
+                .filter((cell) => cell.length > 0),
             );
           }
-          layouts.push({ kind: 'columns', paragraphs, columns });
+          layouts.push({ kind: 'columns', paragraphs, lines, columns });
         } else {
-          const rows = run.map((row) =>
+          const gridRows = complete.map((row) =>
             row.cells.map((cell) => clean(cell.map((word) => word.text).join(' '))),
           );
-          const firstCellIsBullet = run.every((row) =>
+          const firstCellIsBullet = complete.every((row) =>
             /^[•·▪◦●○■□◆◇►▶→✓✔+*«»\-–—]$/.test(
               clean(row.cells[0].map((word) => word.text).join(' ')),
             ),
           );
-          const consistent = rows.every((row) => row.every((cell) => cell.length <= 60));
+          const consistent = gridRows.every((row) =>
+            row.every((cell) => cell.length <= 60),
+          );
 
           if (!firstCellIsBullet && consistent) {
-            layouts.push({ kind: 'table', paragraphs, rows });
+            layouts.push({ kind: 'table', paragraphs, lines, rows: gridRows });
           }
         }
       }
