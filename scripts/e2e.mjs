@@ -791,6 +791,7 @@ async function runLiveFullPage() {
           (number) => numbers.filter((value) => value === number).length > 1,
         ),
         sticky: (output.markdown.match(/STICKY NAVIGATION BAR/g) ?? []).length,
+        markdown: output.markdown.slice(0, 4000),
       };
     }, {
       tiles,
@@ -810,10 +811,18 @@ async function runLiveFullPage() {
         window.__sttTrace = false;
         return window.__sttTraceData ?? null;
       });
-      console.error('stitch tiles:', JSON.stringify(trace?.tiles ?? []));
+      for (const tile of trace?.tiles ?? []) {
+        const numbers = tile.texts.map(
+          (text) => (text.match(/Paragraph (\d{2})/) ?? [])[1] ?? '??',
+        );
+        console.error(
+          `tile offset ${tile.offset} scale ${tile.scale}: ${numbers.join(' ')}`,
+        );
+      }
       for (const pair of trace?.pairs ?? []) {
         console.error('stitch pair:', JSON.stringify(pair));
       }
+      console.error('markdown:', result.markdown);
     }
 
     check('a five-tile page comes back whole', result.unique === 70 && result.count === 70);

@@ -224,7 +224,14 @@ export function stitchTiles(tiles: TileInput[]): StitchedPage {
   const traceRequested =
     (globalThis as unknown as { __sttTrace?: boolean }).__sttTrace === true;
   const trace: {
-    tiles: Array<{ index: number; offset: number; scale: number; dpr: number; lines: number }>;
+    tiles: Array<{
+      index: number;
+      offset: number;
+      scale: number;
+      dpr: number;
+      lines: number;
+      texts: string[];
+    }>;
     pairs: Array<{ loser: string; winner: string; loserY: number; winnerY: number }>;
   } | null = traceRequested ? { tiles: [], pairs: [] } : null;
 
@@ -274,6 +281,7 @@ export function stitchTiles(tiles: TileInput[]): StitchedPage {
       scale: tile.scale,
       dpr: tile.dpr,
       lines: flat.length - tileStart,
+      texts: flat.slice(tileStart).map((line) => line.text),
     });
   }
 
