@@ -738,6 +738,14 @@ async function runLiveFullPage() {
     await tall.bringToFront();
 
     const panel = await openPanelWindow(live.browser, live.extensionId);
+
+    // The panel opens in its own focused window, which covers the tall page.
+    // Chrome then throttles that page and can hand `captureVisibleTab` a stale
+    // compositor frame, which shows up as a hole in the stitched output. Keep
+    // the captured tab in front; the panel only talks to the service worker.
+    await tall.bringToFront();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
     const capture = await panel.evaluate(async () => {
       return chrome.runtime.sendMessage({ type: 'stt:capture-full' });
     });
