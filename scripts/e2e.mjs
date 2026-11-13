@@ -766,11 +766,19 @@ async function runLiveFullPage() {
       const numbers = [...output.markdown.matchAll(/Paragraph (\d{2})/g)].map(
         (match) => match[1],
       );
+      const expected = Array.from({ length: 70 }, (_, index) =>
+        String(index + 1).padStart(2, '0'),
+      );
+      const seen = new Set(numbers);
       return {
-        unique: new Set(numbers).size,
+        unique: seen.size,
         count: numbers.length,
         first: numbers[0],
         last: numbers[numbers.length - 1],
+        missing: expected.filter((number) => !seen.has(number)),
+        duplicated: [...seen].filter(
+          (number) => numbers.filter((value) => value === number).length > 1,
+        ),
         sticky: (output.markdown.match(/STICKY NAVIGATION BAR/g) ?? []).length,
       };
     }, {
@@ -779,6 +787,15 @@ async function runLiveFullPage() {
       scrollHeight: capture.scrollHeight,
       viewportWidth: capture.viewportWidth,
     });
+
+    if (result.unique !== 70 || result.count !== 70) {
+      console.error('tiled page mismatch:', {
+        unique: result.unique,
+        count: result.count,
+        missing: result.missing,
+        duplicated: result.duplicated,
+      });
+    }
 
     check('a five-tile page comes back whole', result.unique === 70 && result.count === 70);
     check(

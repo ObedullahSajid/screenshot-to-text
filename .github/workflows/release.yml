@@ -55,3 +55,15 @@ jobs:
             .output/SHA256SUMS.txt
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+      - name: Keep failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-failure-artifacts
+          path: |
+            .output/e2e-*.png
+            .output/e2e-result.md
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 7
