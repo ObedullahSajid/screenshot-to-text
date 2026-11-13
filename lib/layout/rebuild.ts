@@ -149,9 +149,32 @@ export function rebuildLayout(page: OcrPage): LayoutResult {
     for (const line of lines) push({ md: clean(line.text), kind: 'other' });
   };
 
+  // Debug-only trace for `scripts/e2e.mjs` (never set by the extension itself).
+  const traceOn = (globalThis as unknown as { __sttLayoutTrace?: boolean }).__sttLayoutTrace === true;
+  const trace: Array<{
+    index: number;
+    kind: string;
+    lines: number;
+    first: string;
+    last: string;
+    paragraphs: number;
+    rows: number;
+  }> = [];
+
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index];
     const layout = layoutByParagraph.get(entry.paragraph);
+    if (traceOn) {
+      trace.push({
+        index,
+        kind: layout?.kind ?? 'none',
+        lines: entry.lines.length,
+        first: clean(entry.lines[0]?.text ?? '').slice(0, 18),
+        last: clean(entry.lines[entry.lines.length - 1]?.text ?? '').slice(0, 18),
+        paragraphs: layout?.paragraphs.size ?? 0,
+        rows: layout?.kind === 'table' ? layout.rows.length : (layout?.columns?.length ?? 0),
+      });
+    }
     if (layout) {
       flushCodeRun();
       if (!emitted.has(layout)) {
@@ -213,6 +236,10 @@ export function rebuildLayout(page: OcrPage): LayoutResult {
     push(output);
   }
   flushCodeRun();
+
+  if (traceOn) {
+    (globalThis as unknown as { __sttLayoutTraceData?: unknown }).__sttLayoutTraceData = trace;
+  }
 
   return {
     markdown: sections

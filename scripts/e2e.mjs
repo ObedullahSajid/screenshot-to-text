@@ -768,6 +768,7 @@ async function runLiveFullPage() {
 
     const result = await panel.evaluate(async (input) => {
       window.__sttTrace = true;
+      window.__sttLayoutTrace = true;
       const output = await window.__sttDebug.runTiledPipeline(
         input,
         { compact: true, maxWidth: 2400 },
@@ -791,7 +792,7 @@ async function runLiveFullPage() {
           (number) => numbers.filter((value) => value === number).length > 1,
         ),
         sticky: (output.markdown.match(/STICKY NAVIGATION BAR/g) ?? []).length,
-        markdown: output.markdown.slice(0, 4000),
+        markdown: output.markdown,
       };
     }, {
       tiles,
@@ -821,6 +822,14 @@ async function runLiveFullPage() {
       }
       for (const pair of trace?.pairs ?? []) {
         console.error('stitch pair:', JSON.stringify(pair));
+      }
+      const layout = await panel.evaluate(() => {
+        const data = window.__sttLayoutTraceData ?? [];
+        window.__sttLayoutTrace = false;
+        return data;
+      });
+      for (const entry of layout ?? []) {
+        console.error('layout:', JSON.stringify(entry));
       }
       console.error('markdown:', result.markdown);
     }
