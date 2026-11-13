@@ -767,6 +767,7 @@ async function runLiveFullPage() {
     console.log('tile offsets:', tiles.map((tile) => tile.offset).join(', '));
 
     const result = await panel.evaluate(async (input) => {
+      window.__sttTrace = true;
       const output = await window.__sttDebug.runTiledPipeline(
         input,
         { compact: true, maxWidth: 2400 },
@@ -805,34 +806,14 @@ async function runLiveFullPage() {
         missing: result.missing,
         duplicated: result.duplicated,
       });
-      const perTile = await panel.evaluate(async (input) => {
-        const summary = [];
-        for (const tile of input.tiles) {
-          const output = await window.__sttDebug.runTiledPipeline(
-            { ...input, tiles: [tile] },
-            { compact: true, maxWidth: 2400 },
-            () => {},
-            () => false,
-          );
-          const numbers = [...output.markdown.matchAll(/Paragraph (\d{2})/g)].map(
-            (match) => match[1],
-          );
-          summary.push({
-            offset: tile.offset,
-            count: numbers.length,
-            first: numbers[0],
-            last: numbers[numbers.length - 1],
-            numbers: numbers.join(' '),
-          });
-        }
-        return summary;
-      }, {
-        tiles,
-        dpr: capture.dpr,
-        scrollHeight: capture.scrollHeight,
-        viewportWidth: capture.viewportWidth,
+      const trace = await panel.evaluate(() => {
+        window.__sttTrace = false;
+        return window.__sttTraceData ?? null;
       });
-      for (const tile of perTile) console.error('tile', JSON.stringify(tile));
+      console.error('stitch tiles:', JSON.stringify(trace?.tiles ?? []));
+      for (const pair of trace?.pairs ?? []) {
+        console.error('stitch pair:', JSON.stringify(pair));
+      }
     }
 
     check('a five-tile page comes back whole', result.unique === 70 && result.count === 70);
