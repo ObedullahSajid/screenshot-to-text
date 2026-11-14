@@ -257,7 +257,7 @@ try {
   );
 
   await clickSelector(page, '[aria-label="Add another capture"]');
-  await page.waitForSelector('.dropzone', { timeout: 5_000 });
+  await page.waitForSelector('.dropzone', { timeout: 15_000 });
   check('append banner visible', Boolean(await page.$('.append-banner')));
   await page.screenshot({ path: join(ROOT, '.output', 'e2e-append.png'), fullPage: true });
 

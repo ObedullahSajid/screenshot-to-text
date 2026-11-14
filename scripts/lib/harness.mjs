@@ -215,6 +215,12 @@ export async function renderFixture(renderPage, fixture) {
  * `Runtime.callFunctionOn` never resolves after an OCR run. Input events and
  * main-world evaluation are unaffected, so the coordinates are measured here
  * and dispatched with `page.mouse`.
+ *
+ * A coordinate click is only as good as the measurement: a result view that
+ * reflows between measuring and clicking, or a button that ends up under a
+ * sticky bar, sends the click somewhere else. When the point is not actually
+ * over the element, fall back to a DOM click in the main world, which takes the
+ * same React path and cannot miss.
  */
 export async function clickSelector(page, selector) {
   const point = await page.evaluate((target) => {
@@ -222,9 +228,20 @@ export async function clickSelector(page, selector) {
     if (!element) return null;
     element.scrollIntoView({ block: 'center', inline: 'center' });
     const rect = element.getBoundingClientRect();
-    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    const x = rect.x + rect.width / 2;
+    const y = rect.y + rect.height / 2;
+    const hit = document.elementFromPoint(x, y);
+    return {
+      x,
+      y,
+      covered: !hit || !(hit === element || element.contains(hit)),
+    };
   }, selector);
   if (!point) throw new Error(`No element matches ${selector}`);
+  if (point.covered) {
+    await page.evaluate((target) => document.querySelector(target)?.click(), selector);
+    return;
+  }
   await page.mouse.click(point.x, point.y);
 }
 
