@@ -219,25 +219,9 @@ interface ParagraphCandidate {
  */
 export function stitchTiles(tiles: TileInput[]): StitchedPage {
   const flat: FlatLine[] = [];
-  // Debug-only trace for `scripts/e2e.mjs`: `globalThis.__sttTrace` is set by the
-  // harness, never by the extension itself.
-  const traceRequested =
-    (globalThis as unknown as { __sttTrace?: boolean }).__sttTrace === true;
-  const trace: {
-    tiles: Array<{
-      index: number;
-      offset: number;
-      scale: number;
-      dpr: number;
-      lines: number;
-      texts: string[];
-    }>;
-    pairs: Array<{ loser: string; winner: string; loserY: number; winnerY: number }>;
-  } | null = traceRequested ? { tiles: [], pairs: [] } : null;
 
   for (const tile of tiles) {
     const shift = tile.offset * tile.dpr * tile.scale;
-    const tileStart = flat.length;
     const blockList = pageBlocks(tile.page);
 
     blockList.forEach((block, blockIndex) => {
@@ -273,15 +257,6 @@ export function stitchTiles(tiles: TileInput[]): StitchedPage {
           });
         }
       });
-    });
-
-    trace?.tiles.push({
-      index: tile.index,
-      offset: tile.offset,
-      scale: tile.scale,
-      dpr: tile.dpr,
-      lines: flat.length - tileStart,
-      texts: flat.slice(tileStart).map((line) => line.text),
     });
   }
 
@@ -321,28 +296,12 @@ export function stitchTiles(tiles: TileInput[]): StitchedPage {
 
     duplicates++;
     if (scoreLine(line) > scoreLine(match)) {
-      trace?.pairs.push({
-        loser: match.text,
-        winner: line.text,
-        loserY: Math.round(match.box.y0),
-        winnerY: Math.round(line.box.y0),
-      });
       match.keep = false;
       line.keep = true;
       addToBucket(buckets, bucket, line);
     } else {
-      trace?.pairs.push({
-        loser: line.text,
-        winner: match.text,
-        loserY: Math.round(line.box.y0),
-        winnerY: Math.round(match.box.y0),
-      });
       line.keep = false;
     }
-  }
-
-  if (trace) {
-    (globalThis as unknown as { __sttTraceData?: unknown }).__sttTraceData = trace;
   }
 
   const kept = flat.filter((line) => line.keep);

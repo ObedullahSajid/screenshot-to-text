@@ -767,8 +767,6 @@ async function runLiveFullPage() {
     console.log('tile offsets:', tiles.map((tile) => tile.offset).join(', '));
 
     const result = await panel.evaluate(async (input) => {
-      window.__sttTrace = true;
-      window.__sttLayoutTrace = true;
       const output = await window.__sttDebug.runTiledPipeline(
         input,
         { compact: true, maxWidth: 2400 },
@@ -808,29 +806,6 @@ async function runLiveFullPage() {
         missing: result.missing,
         duplicated: result.duplicated,
       });
-      const trace = await panel.evaluate(() => {
-        window.__sttTrace = false;
-        return window.__sttTraceData ?? null;
-      });
-      for (const tile of trace?.tiles ?? []) {
-        const numbers = tile.texts.map(
-          (text) => (text.match(/Paragraph (\d{2})/) ?? [])[1] ?? '??',
-        );
-        console.error(
-          `tile offset ${tile.offset} scale ${tile.scale}: ${numbers.join(' ')}`,
-        );
-      }
-      for (const pair of trace?.pairs ?? []) {
-        console.error('stitch pair:', JSON.stringify(pair));
-      }
-      const layout = await panel.evaluate(() => {
-        const data = window.__sttLayoutTraceData ?? [];
-        window.__sttLayoutTrace = false;
-        return data;
-      });
-      for (const entry of layout ?? []) {
-        console.error('layout:', JSON.stringify(entry));
-      }
       console.error('markdown:', result.markdown);
     }
 

@@ -149,32 +149,9 @@ export function rebuildLayout(page: OcrPage): LayoutResult {
     for (const line of lines) push({ md: clean(line.text), kind: 'other' });
   };
 
-  // Debug-only trace for `scripts/e2e.mjs` (never set by the extension itself).
-  const traceOn = (globalThis as unknown as { __sttLayoutTrace?: boolean }).__sttLayoutTrace === true;
-  const trace: Array<{
-    index: number;
-    kind: string;
-    lines: number;
-    first: string;
-    last: string;
-    paragraphs: number;
-    rows: number;
-  }> = [];
-
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index];
     const layout = layoutByParagraph.get(entry.paragraph);
-    if (traceOn) {
-      trace.push({
-        index,
-        kind: layout?.kind ?? 'none',
-        lines: entry.lines.length,
-        first: clean(entry.lines[0]?.text ?? '').slice(0, 18),
-        last: clean(entry.lines[entry.lines.length - 1]?.text ?? '').slice(0, 18),
-        paragraphs: layout?.paragraphs.size ?? 0,
-        rows: layout?.kind === 'table' ? layout.rows.length : (layout?.columns?.length ?? 0),
-      });
-    }
     if (layout) {
       flushCodeRun();
       if (!emitted.has(layout)) {
@@ -236,10 +213,6 @@ export function rebuildLayout(page: OcrPage): LayoutResult {
     push(output);
   }
   flushCodeRun();
-
-  if (traceOn) {
-    (globalThis as unknown as { __sttLayoutTraceData?: unknown }).__sttLayoutTraceData = trace;
-  }
 
   return {
     markdown: sections
@@ -688,8 +661,6 @@ function unfence(markdown: string): string {
 interface Table {
   kind: 'table';
   paragraphs: Set<OcrParagraph>;
-  /** Source lines the grid actually covers, so nothing is silently dropped. */
-  lines: Set<OcrLine>;
   rows: string[][];
 }
 
@@ -697,8 +668,6 @@ interface Table {
 interface ColumnRun {
   kind: 'columns';
   paragraphs: Set<OcrParagraph>;
-  /** Source lines the grid actually covers, so nothing is silently dropped. */
-  lines: Set<OcrLine>;
   /** One entry per visual column, each holding that column's cells in order. */
   columns: OcrWord[][][];
 }
@@ -802,7 +771,6 @@ function detectLayouts(
       const columnCount = Math.max(...complete.map((row) => row.cells.length));
       if (columnCount >= 2 && columnCount <= 8) {
         const paragraphs = new Set(complete.map((row) => row.paragraph));
-        const lines = new Set(complete.map((row) => row.line));
         if (looksLikeColumns(complete)) {
           const columns: OcrWord[][][] = [];
           for (let index = 0; index < columnCount; index++) {
@@ -812,7 +780,7 @@ function detectLayouts(
                 .filter((cell) => cell.length > 0),
             );
           }
-          layouts.push({ kind: 'columns', paragraphs, lines, columns });
+          layouts.push({ kind: 'columns', paragraphs, columns });
         } else {
           const gridRows = complete.map((row) =>
             row.cells.map((cell) => clean(cell.map((word) => word.text).join(' '))),
@@ -827,7 +795,7 @@ function detectLayouts(
           );
 
           if (!firstCellIsBullet && consistent) {
-            layouts.push({ kind: 'table', paragraphs, lines, rows: gridRows });
+            layouts.push({ kind: 'table', paragraphs, rows: gridRows });
           }
         }
       }
