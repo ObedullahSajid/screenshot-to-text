@@ -53,7 +53,7 @@ jobs:
           files: |
             .output/*.zip
             .output/SHA256SUMS.txt
-          generate_release_notes: true
+          body_path: .github/release-notes.md
           fail_on_unmatched_files: true
 
       - name: Keep failure artifacts

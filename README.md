@@ -41,7 +41,95 @@ The extension keeps what matters to a model — headings, lists, tables, code, r
 
 ---
 
-## Quick start
+## Install
+
+Chrome 116 or newer, desktop (Windows, macOS, Linux). The extension is not on the
+Chrome Web Store yet, so it installs as an unpacked extension. Chrome works
+normally; you only turn **Developer mode** on once.
+
+1. Download `screenshot-to-text-<version>-chrome.zip` from the
+   [latest release](https://github.com/ObedullahSajid/screenshot-to-text/releases/latest).
+2. Optional, but useful: check it against `SHA256SUMS.txt` from the same release.
+
+   ```powershell
+   # Windows PowerShell
+   Get-FileHash .\screenshot-to-text-<version>-chrome.zip -Algorithm SHA256
+   ```
+
+   ```bash
+   # macOS
+   shasum -a 256 screenshot-to-text-<version>-chrome.zip
+   # Linux
+   sha256sum screenshot-to-text-<version>-chrome.zip
+   ```
+
+   The result must match the hash in `SHA256SUMS.txt`.
+3. Unzip it to a folder that stays put, for example `Documents\Screenshot to Text`.
+   Pick a local path: a folder on OneDrive, Dropbox or a network drive can vanish
+   from under Chrome and the extension is then disabled. The folder must contain
+   `manifest.json`, `background.js` and `sidepanel.html` directly at its top level.
+4. Open `chrome://extensions` and turn on **Developer mode** (top right).
+5. Click **Load unpacked** and select the folder that contains `manifest.json`
+   — not the zip, and not its parent folder.
+6. Pin it: click the puzzle-piece icon in the toolbar and pin **Screenshot to Text**.
+
+Open any ordinary web page and click the toolbar icon. The side panel opens on the
+right and Chrome grants the extension access to that tab. The first capture takes a
+few seconds while the bundled OCR engine warms up; every capture after that is
+instant and offline.
+
+### Page access
+
+Chrome only lets an extension read a tab when the user **invokes** it on that tab: a click on the toolbar icon, the `Ctrl+Shift+X` shortcut, or the context menu. A click inside the side panel does not count — the panel is not an invocation.
+
+So the workflow is:
+
+- **Click the toolbar icon on the page** → the panel opens and every capture button works for that tab.
+- The grant lasts until you navigate, reload or switch tabs. After that, click the icon again on the new tab.
+- `Ctrl+Shift+X` grants access the same way and starts a region capture immediately.
+
+If a capture starts without that grant, the panel says so and points at the icon instead of blaming the page. Internal pages (`chrome://`, the Web Store, the PDF viewer) stay blocked either way — paste or upload the screenshot there.
+
+### Try it
+
+- Copy any screenshot, click the panel, press `Ctrl+V`.
+- Click the toolbar icon **on the page** (that grants access to it), then click **Select region** and drag over text.
+- Or press `Ctrl+Shift+X` and drag over text right away.
+- Or right-click an image → **Extract text from this image**.
+- Click the toolbar icon, then **Visible tab** to read what is on screen, or **Full page** to scroll and stitch the whole page.
+
+### Updating
+
+Download the zip for the new version, extract it into the same folder (allow it to
+replace files), then open `chrome://extensions` and press the **reload** arrow on
+the Screenshot to Text card. Your settings and pin survive. History is stored
+locally and may be cleared by an update — copy anything you want to keep first.
+
+### Uninstalling
+
+`chrome://extensions` → **Remove**. The last 20 captures kept in local storage are
+deleted with it.
+
+### Troubleshooting
+
+- **"Manifest file is missing or unreadable"** — you selected the zip or a parent
+  folder. Select the folder that directly contains `manifest.json`.
+- **The extension is disabled after a restart** — its folder moved, was renamed, or
+  is on a drive Chrome cannot see at startup. Re-extract to a local path and load
+  it again.
+- **The panel does not open** — Chrome older than 116 (check `chrome://version`), or
+  the panel is already open in that window.
+- **"Screenshot to Text needs access to this page"** — click the toolbar icon on that
+  tab. `chrome://` pages, the Web Store and the PDF viewer stay blocked by Chrome;
+  paste a screenshot there instead.
+- **Paste does nothing** — click inside the panel first so it has focus, then press
+  `Ctrl+V`. Dragging an image file onto the panel always works.
+- **Chrome shows "Disable developer mode extensions" at launch** — click **Keep**.
+  That is Chrome's standard notice for manually loaded extensions.
+
+## Build from source
+
+Just want to use it? See [Install](#install) above.
 
 Requirements: Node 20+, Chrome 116+.
 
@@ -64,25 +152,6 @@ npm run dev
 ```
 
 WXT launches a separate Chrome profile with the extension loaded. Click the toolbar icon to open the panel.
-
-### Page access
-
-Chrome only lets an extension read a tab when the user **invokes** it on that tab: a click on the toolbar icon, the `Ctrl+Shift+X` shortcut, or the context menu. A click inside the side panel does not count — the panel is not an invocation.
-
-So the workflow is:
-
-- **Click the toolbar icon on the page** → the panel opens and every capture button works for that tab.
-- The grant lasts until you navigate, reload or switch tabs. After that, click the icon again on the new tab.
-- `Ctrl+Shift+X` grants access the same way and starts a region capture immediately.
-
-If a capture starts without that grant, the panel says so and points at the icon instead of blaming the page. Internal pages (`chrome://`, the Web Store, the PDF viewer) stay blocked either way — paste or upload the screenshot there.
-
-### Try it
-
-- Copy any screenshot, click the panel, press `Ctrl+V`.
-- Click the toolbar icon **on the page** (that grants access to it), then click **Select region** and drag over text.
-- Or press `Ctrl+Shift+X` and drag over text right away.
-- Or right-click an image → **Extract text from this image**.
 
 ---
 

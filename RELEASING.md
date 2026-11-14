@@ -22,7 +22,9 @@ does not match it.
    ```
 
 7. The `release` workflow verifies again, builds the zip, writes
-   `SHA256SUMS.txt`, and publishes a GitHub release with both attached.
+   `SHA256SUMS.txt`, and publishes a GitHub release with both attached. The
+   release body comes from `.github/release-notes.md`; edit that file if the
+   install steps or links ever change.
 8. Upload that same zip to the Chrome Web Store dashboard. The listing copy,
    privacy text, permission justifications and screenshots are in `store/`.
 
