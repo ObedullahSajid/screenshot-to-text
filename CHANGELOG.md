@@ -18,7 +18,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Changed
 
 - The OCR worker and token vocabulary now load while the panel is idle, so the
-  first capture no longer pays their start-up.
+  first capture no longer pays their start-up. The vocabulary is parsed in a
+  dedicated worker, so warming it never freezes the panel.
 - Keep/exclude edits that only remove whole lines are applied to the recognised
   page and re-rendered, instead of reading the capture again (2 ms instead of
   ~450 ms on a small screenshot). A box that cuts through a line still triggers

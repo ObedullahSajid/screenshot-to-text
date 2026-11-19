@@ -288,7 +288,7 @@ lib/
   format.ts              Markdown → plain-text / outline presets
   merge.ts               append two captures, de-duplicate the seam
   fullpage.ts            tile plan, injected scroll/hide/restore, OCR line stitching
-  tokens.ts              GPT-4o tokenizer (lazy-loaded) + image estimate
+  tokens.ts              GPT-4o tokenizer (worker, warmed at idle) + image estimate
   region-selector.ts     injected region overlay and image locator
   pipeline.ts            preprocess → OCR (1–2 passes) → rebuild → clean → count, for one image or many tiles
   storage.ts             settings + local history
