@@ -263,6 +263,7 @@ Layout analysis is the usual failure mode, not character recognition: a panel, a
 - **Planning** — tiles overlap by 140 px, and the offsets are spread evenly so the last tile ends exactly at the bottom of the page. A page that would need more than 24 tiles is captured up to that cap and the result says so.
 - **Scrolling** — the page's `scroll-behavior` is forced to `auto` and restored afterwards. Fixed and sticky elements are tagged before the first tile; from the second tile on they are hidden with `visibility: hidden`, which keeps their layout box so nothing shifts. The original scroll position is restored in a `finally` block.
 - **Capture** — `chrome.tabs.captureVisibleTab` is rate-limited to roughly two calls per second, so tiles are spaced 620 ms apart. A five-tile page takes about three seconds to photograph.
+- **Reading** — a long page is read by two Tesseract workers when the machine allows it (three or more tiles, three or more cores, 4 GB+ reported memory), which nearly halves the wait; the second worker starts while the first tile is already being read. A small page, a weak machine or a failed second worker falls back to one worker. Each worker holds its own ~100 MB copy of the OCR core and language model, which is why the pool never exceeds two.
 - **Stitching** — joining the tiles' Markdown would duplicate text: Tesseract groups a whole tile of prose into one paragraph, so the same sentence appears inside two different giant lines. Instead the OCR **lines** are shifted into page coordinates (`scrollOffset × dpr × preparedScale + lineY`), de-duplicated when their boxes overlap and their text is similar, and a clipped fragment never replaces the complete line from the neighbouring tile. Paragraphs that span a seam are merged, then layout is rebuilt exactly once over the virtual page.
 - **Ordering** — paragraphs keep the tile's own reading order. This protects sidebars and columns, which a global y-sort would interleave.
 
@@ -280,6 +281,7 @@ entrypoints/
 lib/
   ocr/engine.ts          Tesseract worker lifecycle + PSM switching (bundled worker/wasm/traineddata)
   ocr/types.ts           structural OCR types, decoupled from tesseract.js
+  ocr/pool.ts            worker-count rule for full-page captures
   layout/rebuild.ts      OCR geometry → Markdown
   layout/filter.ts       keep/exclude boxes applied to a recognised page (no OCR)
   regions.ts             apply keep/exclude boxes and stack kept areas
@@ -390,7 +392,7 @@ It writes:
 
 The benchmark scores phrase recall plus structural checks (heading, bullet, nested bullet, numbered list, table, padded row, empty middle cell, label/value pair, stacked form field, column order, column + table order, fence, indentation, quality notes) per fixture, reports confidence, sharpness, contrast and timing, and writes `.output/bench/benchmark.{json,md}` together with each rendered PNG and its Markdown. A gated fixture must reach 0.75 recall and pass every structural check; `--only=table,list` runs a subset. A snapshot on a normal desktop: 0.99 gated recall, under a second per capture after the engine is warm.
 
-`npm run bench` measures where the time goes: engine cold start, the tokenizer, each pipeline stage, a five-tile long page (per-tile OCR, stitch, layout) and a region edit, then sweeps the OCR width cap over a wide page with large and dense text. It writes `.output/bench/timing.{json,md}` plus the Markdown of the stitched page, and enforces nothing — timings vary by machine, so the numbers are for comparing changes on the same machine. The width sweep is the guard for a future default change: on a 2560 px page, 1600 px halved the time for 22 px text with identical output, but dropped row recall from 1.00 to 0.27 on 14 px text, which is why the default stays at 2400 px.
+`npm run bench` measures where the time goes: engine cold start, the tokenizer, each pipeline stage, a region edit, and a long page read once and then twice in parallel, asserting the two Markdown outputs are identical. It then sweeps the OCR width cap over a wide page with large and dense text. It writes `.output/bench/timing.{json,md}` plus the Markdown of the stitched page, and enforces nothing — timings vary by machine, so the numbers are for comparing changes on the same machine. `--tiles=9` makes the long page longer; the reported heap is the panel's JavaScript heap and excludes the OCR workers, which live in their own processes. The width sweep is the guard for a future default change: on a 2560 px page, 1600 px halved the time for 22 px text with identical output, but dropped row recall from 1.00 to 0.27 on 14 px text, which is why the default stays at 2400 px.
 
 Debug a layout change without rebuilding the extension:
 

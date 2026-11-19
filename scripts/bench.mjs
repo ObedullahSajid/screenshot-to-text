@@ -34,6 +34,9 @@ const WIDTHS = (widthsArg?.slice('--widths='.length) ?? '2400,1600')
   .map(Number)
   .filter((value) => Number.isFinite(value) && value > 0);
 
+const tilesArg = process.argv.find((argument) => argument.startsWith('--tiles='));
+const LONG_TILES = Math.max(1, Number(tilesArg?.slice('--tiles='.length) ?? 5));
+
 function pad(value, width) {
   const text = String(value);
   return text + ' '.repeat(Math.max(0, width - text.length));
@@ -71,13 +74,13 @@ function median(values) {
 }
 
 /** A tall document sliced into overlapping viewport tiles. */
-async function buildLongPage(renderPage) {
-  return renderPage.evaluate(() => {
+async function buildLongPage(renderPage, tileCount) {
+  return renderPage.evaluate((count) => {
     const width = 1000;
     const viewport = 800;
     const overlap = 140;
     const step = viewport - overlap;
-    const height = 3200;
+    const height = (count - 1) * step + viewport;
 
     const source = document.createElement('canvas');
     source.width = width;
@@ -90,7 +93,8 @@ async function buildLongPage(renderPage) {
     ctx.font = '700 26px Arial';
     ctx.fillText('Long page timing report', 40, 30);
     ctx.font = '18px Arial';
-    for (let index = 0; index < 88; index++) {
+    const rows = Math.max(0, Math.floor((height - 120) / 34));
+    for (let index = 0; index < rows; index++) {
       const number = String(index + 1).padStart(2, '0');
       ctx.fillText(`Row ${number} alpha beta gamma delta epsilon`, 40, 90 + index * 34);
     }
@@ -110,7 +114,7 @@ async function buildLongPage(renderPage) {
     });
 
     return { tiles, dpr: 1, scrollHeight: height, viewportWidth: width };
-  });
+  }, tileCount);
 }
 
 /** A wide capture, where the OCR width cap actually changes the pixel count. */
@@ -178,11 +182,12 @@ async function measurePipeline(page, dataUrl, options) {
   );
 }
 
-async function measureTiled(page, capture, options) {
+async function measureTiled(page, capture, options, workers) {
   return page.evaluate(
-    async ({ capture: tiledCapture, options: pipelineOptions }) => {
+    async ({ capture: tiledCapture, options: pipelineOptions, workers: limit }) => {
       const debug = window.__sttDebug;
       if (!debug) throw new Error('Open the panel with ?debug=1');
+      debug.setMaxWorkers(limit);
       const heap = () => performance.memory?.usedJSHeapSize ?? 0;
 
       const events = [];
@@ -209,7 +214,7 @@ async function measureTiled(page, capture, options) {
         tiles: tiledCapture.tiles.length,
       };
     },
-    { capture, options },
+    { capture, options, workers },
   );
 }
 
@@ -342,31 +347,39 @@ try {
   }
 
   /* ------------------------------------------------------------ long page */
-  const longPage = await buildLongPage(renderPage);
-  const tiled = await measureTiled(page, longPage, options);
-  const tileLabels = tiled.events
-    .map((event) => event.stage.split(' · ')[0])
-    .filter((label) => label.startsWith('Reading tile'));
-  const perTile = stageTimes(
-    tiled.events.filter((event) => event.stage.startsWith('Reading tile')),
-    tiled.total,
-  );
-  const tileOcr = Object.values(perTile);
-  const ocrMs = tileOcr.reduce((total, value) => total + value, 0);
+  const longPage = await buildLongPage(renderPage, LONG_TILES);
+
+  // Warm the tiled path once so neither side of the comparison pays for the
+  // first second worker, cold image decoding or a cold vocabulary.
+  await measureTiled(page, longPage, options, 2);
+
+  const sequential = await measureTiled(page, longPage, options, 1);
+  const parallel = await measureTiled(page, longPage, options, 2);
+
+  const summarizeTiled = (run) => {
+    const stages = stageTimes(run.events, run.total);
+    const overhead =
+      (stages['Stitching tiles'] ?? 0) +
+      (stages['Rebuilding layout'] ?? 0) +
+      (stages['Counting tokens'] ?? 0);
+    return {
+      totalMs: round(run.total),
+      ocrMs: round(run.total - overhead),
+      overheadMs: round(overhead),
+      words: run.stats.words,
+      passes: run.passes,
+      pageHeapMb: round(run.peak / (1024 * 1024)),
+    };
+  };
 
   report.tiled = {
-    tiles: tiled.tiles,
-    totalMs: round(tiled.total),
-    ocrMs: round(ocrMs),
-    perTileMs: tileOcr.map(round),
-    stitchMs: round(stageTimes(tiled.events, tiled.total)['Stitching tiles'] ?? 0),
-    layoutMs: round(stageTimes(tiled.events, tiled.total)['Rebuilding layout'] ?? 0),
-    tokensMs: round(stageTimes(tiled.events, tiled.total)['Counting tokens'] ?? 0),
-    lines: tiled.stats.words,
-    peakMb: round(tiled.peak / (1024 * 1024)),
-    uniqueTiles: tileLabels.length,
+    tiles: sequential.tiles,
+    sequential: summarizeTiled(sequential),
+    parallel: summarizeTiled(parallel),
+    identical: sequential.markdown === parallel.markdown,
+    speedup: Number((sequential.total / parallel.total).toFixed(2)),
   };
-  await writeFile(join(OUT, 'tiled.md'), tiled.markdown, 'utf8');
+  await writeFile(join(OUT, 'tiled.md'), sequential.markdown, 'utf8');
 
   /* ----------------------------------------------------------- width sweep */
 
@@ -447,12 +460,22 @@ const tiled = report.tiled;
 const regionText = report.regionEdit
   ? `region edit: ${report.regionEdit.ms} ms without OCR (first read: ${report.regionEdit.ocrMs} ms) · ${report.regionEdit.lines} lines kept, ${report.regionEdit.partial} partial`
   : 'region edit: not measured';
+const workersTable = tiled
+  ? table(
+      ['workers', 'total', 'ocr', 'overhead', 'page heap', 'words'],
+      [
+        ['1', `${tiled.sequential.totalMs} ms`, `${tiled.sequential.ocrMs} ms`, `${tiled.sequential.overheadMs} ms`, `${tiled.sequential.pageHeapMb} MB`, tiled.sequential.words],
+        ['2', `${tiled.parallel.totalMs} ms`, `${tiled.parallel.ocrMs} ms`, `${tiled.parallel.overheadMs} ms`, `${tiled.parallel.pageHeapMb} MB`, tiled.parallel.words],
+      ],
+    )
+  : 'not measured';
 const tiledText = tiled
   ? [
-      `tiles: ${tiled.tiles} (${Math.round(tiled.ocrMs / Math.max(1, tiled.tiles))} ms of OCR each)`,
-      `total: ${tiled.totalMs} ms · OCR ${tiled.ocrMs} ms · stitch ${tiled.stitchMs} ms · layout ${tiled.layoutMs} ms · tokens ${tiled.tokensMs} ms`,
-      `words: ${tiled.lines} · peak heap ${tiled.peakMb} MB`,
-      `per tile: ${tiled.perTileMs.join(', ')} ms`,
+      `tiles: ${tiled.tiles} · ${tiled.identical ? 'identical output' : 'OUTPUT DIFFERS'} · ${tiled.speedup}×`,
+      '',
+      workersTable,
+      '',
+      'page heap is the panel thread only; each OCR worker holds its own memory.',
     ].join('\n')
   : 'not measured';
 
@@ -465,7 +488,7 @@ console.log(
 );
 console.log(fixtureTable);
 console.log(`\n${regionText}`);
-console.log(`\nLong page\n${tiledText}\n`);
+console.log(`\nLong page (one vs two workers)\n${tiledText}\n`);
 console.log('Width sweep\n');
 console.log(sweepTable);
 console.log('');
@@ -485,7 +508,8 @@ const markdown = [
   '',
   regionText,
   '',
-  '## Long page (tiled)',  '',
+  '## Long page (one worker vs two)',
+  '',
   '```',
   tiledText,
   '```',

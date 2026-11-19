@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { planTiles, stitchTiles } from '../../lib/fullpage';
 import { rebuildLayout } from '../../lib/layout/rebuild';
 import { getEngine } from '../../lib/ocr/engine';
+import { setMaxWorkers, workersForTiles } from '../../lib/ocr/pool';
 import { prepareImage } from '../../lib/preprocess';
 import { renderPage, runPipeline, runTiledPipeline } from '../../lib/pipeline';
 import { coversFullFrame, filterPageByRegions } from '../../lib/layout/filter';
@@ -23,6 +24,8 @@ declare global {
       renderPage: typeof renderPage;
       prepareImage: typeof prepareImage;
       getEngine: typeof getEngine;
+      setMaxWorkers: typeof setMaxWorkers;
+      workersForTiles: typeof workersForTiles;
       countTextTokens: typeof countTextTokens;
       warmTokenizer: typeof warmTokenizer;
       filterPageByRegions: typeof filterPageByRegions;
@@ -44,6 +47,8 @@ if (new URLSearchParams(window.location.search).has('debug')) {
     renderPage,
     prepareImage,
     getEngine,
+    setMaxWorkers,
+    workersForTiles,
     countTextTokens,
     warmTokenizer,
     filterPageByRegions,

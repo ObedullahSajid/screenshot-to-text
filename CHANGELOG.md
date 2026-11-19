@@ -10,13 +10,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Added
 
 - **Browser-free unit tests** (`npm run test`): tiling maths, the partial-grid
-  rule, keep/exclude filtering, blank-page detection and compaction.
+  rule, keep/exclude filtering, blank-page detection, compaction and the
+  worker-count rule.
 - **Per-stage timing harness** (`npm run bench`): engine cold start, tokenizer,
-  each pipeline stage, a five-tile page and an OCR width sweep, written to
-  `.output/bench/timing.{json,md}`.
+  each pipeline stage, a long page read with one and two workers, and an OCR
+  width sweep, written to `.output/bench/timing.{json,md}`.
 
 ### Changed
 
+- Full-page captures read tiles on two Tesseract workers when the page has at
+  least three tiles and the machine reports three or more cores and 4 GB+ of
+  memory. Output is identical; on the benchmark the five-tile page went from
+  22.6 s to 13.3 s (1.7×) and a nine-tile page from 39.0 s to 23.3 s (1.67×).
+  Small pages, weak machines and a failed second worker stay on one worker, and
+  the pool never grows past two because each worker holds its own ~100 MB copy
+  of the core and language model.
 - The OCR worker and token vocabulary now load while the panel is idle, so the
   first capture no longer pays their start-up. The vocabulary is parsed in a
   dedicated worker, so warming it never freezes the panel.

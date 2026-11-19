@@ -1,5 +1,6 @@
 import { cleanOutput } from './clean';
-import { PSM_MODES, recognizeOnce, type OcrProgress, type PsmMode } from './ocr/engine';
+import { getEngine, PSM_MODES, recognizeOnce, type OcrProgress, type PsmMode } from './ocr/engine';
+import { workersForTiles } from './ocr/pool';
 import { rebuildLayout, type LayoutResult } from './layout/rebuild';
 import type { OcrPage } from './ocr/types';
 import {
@@ -180,79 +181,153 @@ export async function runTiledPipeline(
   const { tiles } = capture;
   if (!tiles.length) throw new Error('No tiles were captured.');
 
-  const recognitions: Array<{
+  /** One read tile, in page coordinates. */
+  interface TileRecognition {
     page: OcrPage;
     offset: number;
     scale: number;
     index: number;
-  }> = [];
+  }
+
+  const recognitions: Array<TileRecognition | null> = new Array(tiles.length).fill(null);
+  const workers = workersForTiles(tiles.length);
+  let nextTile = 0;
+  let completed = 0;
+  let aborted = false;
   let passes = 1;
   let quality = NEUTRAL_QUALITY;
   let inverted = false;
   let width = 0;
-  let thumb: PageThumb | null = null;
+  // Filled by the slot loops, hence the box: TypeScript cannot see assignments
+  // made inside those async closures.
+  const thumbBox: { value: PageThumb | null } = { value: null };
 
-  for (let index = 0; index < tiles.length; index++) {
-    if (isCancelled()) throw new Error('Cancelled.');
-    const tile = tiles[index];
-    const label = `Reading tile ${index + 1} of ${tiles.length}`;
-    onProgress(label, 0.04 + (index / tiles.length) * 0.82);
+  // One bar for the whole run. Two workers report progress independently, so
+  // their fractions are combined rather than forwarded; the bar then still
+  // moves forward when tiles finish out of order.
+  let lastProgress = 0.04;
+  const inFlight = new Map<number, number>();
 
-    const image = await loadImage(tile.dataUrl);
-    // Build the preview before the image goes out of scope, so a 24-tile page
-    // never holds 24 decoded screenshots in memory at once.
-    if (!thumb) thumb = createPageThumb(capture, image);
-    drawTileIntoThumb(thumb, image, tile.offset, capture.dpr);
+  const publish = (stage?: string) => {
+    const running = Array.from(inFlight.values()).reduce((sum, value) => sum + value, 0);
+    const fraction = Math.min(1, (completed + running) / tiles.length);
+    lastProgress = Math.max(lastProgress, 0.04 + fraction * 0.82);
+    const done = `${completed} of ${tiles.length} done`;
+    const prefix = tiles.length === 1 ? 'Reading tile' : 'Reading tiles';
+    onProgress(stage ? `${stage} · ${done}` : `${prefix} · ${done}`, lastProgress);
+  };
 
-    const prepared = prepareImage(image, options.maxWidth);
+  /**
+   * Reads tiles from one worker until the queue is empty. Decoding and
+   * preparing stay here on the main thread; only recognition runs on the
+   * worker, so two slots overlap without sharing a canvas.
+   */
+  const readSlot = async (slot: number) => {
+    while (true) {
+      if (aborted || isCancelled()) return;
+      const index = nextTile++;
+      if (index >= tiles.length) return;
+      const tile = tiles[index];
+      inFlight.set(slot, 0);
+      publish(`Reading tile ${index + 1}`);
 
-    if (isBlankCanvas(prepared.canvas)) {
-      // A blank stretch between sections costs nothing. The page still counts
-      // towards the preview and the offsets, it just holds no lines.
+      const image = await loadImage(tile.dataUrl);
+      // Build the preview before the image goes out of scope, so a 24-tile page
+      // never holds 24 decoded screenshots in memory at once.
+      if (!thumbBox.value) thumbBox.value = createPageThumb(capture, image);
+      drawTileIntoThumb(thumbBox.value, image, tile.offset, capture.dpr);
+
+      const prepared = prepareImage(image, options.maxWidth);
+
+      if (isBlankCanvas(prepared.canvas)) {
+        // A blank stretch between sections costs nothing. The page still counts
+        // towards the preview and the offsets, it just holds no lines.
+        if (index === 0) {
+          quality = prepared.quality;
+          inverted = prepared.inverted;
+          width = image.naturalWidth;
+        }
+        recognitions[index] = {
+          page: EMPTY_PAGE,
+          offset: tile.offset,
+          scale: prepared.scale,
+          index,
+        };
+        inFlight.delete(slot);
+        completed++;
+        publish();
+        continue;
+      }
+
+      const best = await recognizeBest(
+        prepared,
+        options,
+        (stage, progress) => {
+          // A tile's own 0-1 progress counts as at most one tile's share, so
+          // the combined bar can never sit above the tiles actually finished.
+          inFlight.set(slot, progress * 0.9);
+          publish(stage);
+        },
+        0,
+        1,
+        slot,
+      );
+
       if (index === 0) {
         quality = prepared.quality;
         inverted = prepared.inverted;
         width = image.naturalWidth;
       }
-      recognitions.push({
-        page: EMPTY_PAGE,
+      passes = Math.max(passes, best.passes);
+      recognitions[index] = {
+        page: best.page,
         offset: tile.offset,
         scale: prepared.scale,
         index,
-      });
-      continue;
+      };
+      inFlight.delete(slot);
+      completed++;
+      publish();
     }
+  };
 
-    const best = await recognizeBest(
-      prepared,
-      options,
-      (stage, progress) =>
-        // Keep the tile number visible even while Tesseract reports its own
-        // stage, otherwise the panel jumps between "Reading text" and blanks.
-        onProgress(`${label} · ${stage}`, 0.04 + ((index + progress) / tiles.length) * 0.82),
-      0,
-      1,
-    );
-
-    if (index === 0) {
-      quality = prepared.quality;
-      inverted = prepared.inverted;
-      width = image.naturalWidth;
+  /**
+   * Starts a worker and lets it drain the queue. The second worker is opened
+   * while the first tile is already being read, so its start-up is hidden. If
+   * it cannot start, the page is read on the worker that does work instead of
+   * failing the whole capture.
+   */
+  const openSlot = async (slot: number) => {
+    if (slot > 0) {
+      const ready = await getEngine(slot).then(
+        () => true,
+        () => false,
+      );
+      if (!ready) return;
     }
-    passes = Math.max(passes, best.passes);
-    recognitions.push({
-      page: best.page,
-      offset: tile.offset,
-      scale: prepared.scale,
-      index,
-    });
-  }
+    try {
+      await readSlot(slot);
+    } catch (error) {
+      // Stop the other worker from picking up more tiles after the capture has
+      // already failed.
+      aborted = true;
+      throw error;
+    }
+  };
+
+  await Promise.all(Array.from({ length: workers }, (_, slot) => openSlot(slot)));
 
   if (isCancelled()) throw new Error('Cancelled.');
 
+  if (recognitions.some((entry) => entry === null)) {
+    // The only way here is a worker that stopped without reporting an error.
+    throw new Error('Not every tile was read.');
+  }
+
   onProgress('Stitching tiles', 0.9);
+  const read = recognitions.filter((entry): entry is TileRecognition => entry !== null);
   const stitched = stitchTiles(
-    recognitions.map((entry) => ({
+    read.map((entry) => ({
       page: entry.page,
       offset: entry.offset,
       dpr: capture.dpr,
@@ -268,7 +343,9 @@ export async function runTiledPipeline(
 
   onProgress('Counting tokens', 0.97);
   const tokens = await countTextTokens(markdown);
-  const thumbUrl = thumb ? thumb.canvas.toDataURL('image/jpeg', 0.72) : '';
+  const thumbUrl = thumbBox.value
+    ? thumbBox.value.canvas.toDataURL('image/jpeg', 0.72)
+    : '';
 
   onProgress('Done', 1);
 
@@ -300,9 +377,13 @@ async function recognizeBest(
   onProgress: OcrProgress,
   base: number,
   span: number,
+  slot = 0,
 ): Promise<Recognition> {
-  const first = await recognizeOnce(prepared.canvas, PSM_MODES.auto, (stage, progress) =>
-    onProgress(stage, base + progress * span * 0.68),
+  const first = await recognizeOnce(
+    prepared.canvas,
+    PSM_MODES.auto,
+    (stage, progress) => onProgress(stage, base + progress * span * 0.68),
+    slot,
   );
   let best = evaluate(first, options);
   let passes = 1;
@@ -313,8 +394,11 @@ async function recognizeBest(
       mode === PSM_MODES.sparse ? 'Re-reading (sparse layout)' : 'Re-reading (dense layout)',
       base + span * 0.7,
     );
-    const second = await recognizeOnce(prepared.canvas, mode, (stage, progress) =>
-      onProgress(stage, base + span * 0.7 + progress * span * 0.3),
+    const second = await recognizeOnce(
+      prepared.canvas,
+      mode,
+      (stage, progress) => onProgress(stage, base + span * 0.7 + progress * span * 0.3),
+      slot,
     );
     passes = 2;
     const alternative = evaluate(second, options);

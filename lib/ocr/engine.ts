@@ -27,19 +27,36 @@ const STAGE_LABELS: Record<string, string> = {
   'recognizing text': 'Reading text',
 };
 
-let enginePromise: Promise<TesseractWorker> | null = null;
-let progressSink: OcrProgress | null = null;
-let activePsm: PsmMode | null = null;
+/**
+ * One Tesseract worker plus the state that belongs to it. The panel usually
+ * runs a single worker; a long captured page can use a second one, and each
+ * needs its own layout mode and progress sink.
+ */
+interface Slot {
+  worker: Promise<TesseractWorker> | null;
+  psm: PsmMode | null;
+  progress: OcrProgress | null;
+}
 
-function report(stage: string, progress: number) {
-  progressSink?.(stage, Math.max(0, Math.min(1, progress)));
+const slots: Slot[] = [];
+
+function slotAt(index: number): Slot {
+  while (slots.length <= index) {
+    slots.push({ worker: null, psm: null, progress: null });
+  }
+  return slots[index];
+}
+
+function report(slot: Slot, stage: string, progress: number) {
+  slot.progress?.(stage, Math.max(0, Math.min(1, progress)));
 }
 
 /**
  * Tesseract is loaded entirely from files bundled inside the extension:
  * no CDN, no network request, no remote code (MV3 requirement).
  */
-async function createEngine(): Promise<TesseractWorker> {
+async function createEngine(index: number): Promise<TesseractWorker> {
+  const slot = slotAt(index);
   const worker = await createWorker('eng', OEM.LSTM_ONLY, {
     workerPath: chrome.runtime.getURL('tesseract/worker.min.js'),
     corePath: chrome.runtime.getURL('tesseract/tesseract-core-simd-lstm.wasm.js'),
@@ -51,9 +68,9 @@ async function createEngine(): Promise<TesseractWorker> {
       const label = STAGE_LABELS[message.status];
       if (!label) return;
       if (message.status === 'recognizing text') {
-        report(label, 0.15 + (message.progress ?? 0) * 0.85);
+        report(slot, label, 0.15 + (message.progress ?? 0) * 0.85);
       } else {
-        report(label, Math.min(0.15, (message.progress ?? 0) * 0.15));
+        report(slot, label, Math.min(0.15, (message.progress ?? 0) * 0.15));
       }
     },
   });
@@ -67,19 +84,21 @@ async function createEngine(): Promise<TesseractWorker> {
     // "raw text" tab and indentation hints in code blocks.
     preserve_interword_spaces: '1',
   });
-  activePsm = PSM_MODES.auto;
+  slot.psm = PSM_MODES.auto;
 
   return worker;
 }
 
-export function getEngine(): Promise<TesseractWorker> {
-  if (!enginePromise) {
-    enginePromise = createEngine().catch((error) => {
-      enginePromise = null;
+/** Starts (or reuses) the worker in the given slot. One recognition at a time per slot. */
+export function getEngine(index = 0): Promise<TesseractWorker> {
+  const slot = slotAt(index);
+  if (!slot.worker) {
+    slot.worker = createEngine(index).catch((error) => {
+      slot.worker = null;
       throw error;
     });
   }
-  return enginePromise;
+  return slot.worker;
 }
 
 /** One full recognition pass at a given layout mode. Progress is 0-1. */
@@ -87,18 +106,20 @@ export async function recognizeOnce(
   canvas: HTMLCanvasElement,
   psm: PsmMode,
   onProgress: OcrProgress,
+  index = 0,
 ): Promise<OcrPage> {
-  progressSink = onProgress;
+  const slot = slotAt(index);
+  slot.progress = onProgress;
   try {
-    const worker = await getEngine();
-    if (activePsm !== psm) {
+    const worker = await getEngine(index);
+    if (slot.psm !== psm) {
       await worker.setParameters({ tessedit_pageseg_mode: psm });
-      activePsm = psm;
+      slot.psm = psm;
     }
     const { data } = await worker.recognize(canvas, {}, { blocks: true, text: true });
     return data as unknown as OcrPage;
   } finally {
-    progressSink = null;
+    slot.progress = null;
   }
 }
 
@@ -113,16 +134,17 @@ export function prewarmEngine(): void {
   });
 }
 
-/** Frees the ~100 MB the worker holds. Call when the panel is closed. */
+/** Frees the ~100 MB each worker holds. Call when the panel is closed. */
 export async function disposeEngine(): Promise<void> {
-  if (!enginePromise) return;
-  try {
-    const worker = await enginePromise;
-    await worker.terminate();
-  } catch {
-    // Already gone.
-  } finally {
-    enginePromise = null;
-    activePsm = null;
-  }
+  const open = slots.map(async (slot) => {
+    if (!slot.worker) return;
+    try {
+      const worker = await slot.worker;
+      await worker.terminate();
+    } catch {
+      // Already gone.
+    }
+  });
+  await Promise.all(open);
+  slots.length = 0;
 }
