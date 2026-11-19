@@ -61,6 +61,13 @@ interface Job {
   progress: number;
 }
 
+/** The growing top of the page while a full-page capture is being read. */
+interface Preview {
+  markdown: string;
+  tiles: number;
+  total: number;
+}
+
 interface Failure {
   message: string;
   hint?: string;
@@ -151,6 +158,7 @@ export default function App() {
   const [regionsOpen, setRegionsOpen] = useState(false);
 
   const [job, setJob] = useState<Job | null>(null);
+  const [preview, setPreview] = useState<Preview | null>(null);
   const [error, setError] = useState<Failure | null>(null);
   const [overlay, setOverlay] = useState<Overlay>('none');
   const [dragging, setDragging] = useState(false);
@@ -160,6 +168,8 @@ export default function App() {
   const pendingBusy = useRef(false);
   const fullBusy = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const previewRef = useRef<HTMLPreElement>(null);
+  const previewPinned = useRef(true);
   const appendBase = useRef<AppendBase | null>(null);
   const pageCache = useRef<PageCache | null>(null);
 
@@ -200,6 +210,7 @@ export default function App() {
       setView(settings.preset);
       setOverlay('none');
       setRegionsOpen(false);
+      setPreview(null);
       setJob({ stage: 'Preparing image', progress: 0.02 });
 
       try {
@@ -319,6 +330,8 @@ export default function App() {
       setFullNote(note);
       setMergeNote(null);
       pageCache.current = null;
+      previewPinned.current = true;
+      setPreview(null);
       setJob({ stage: 'Reading tile 1', progress: 0.04 });
 
       try {
@@ -329,10 +342,19 @@ export default function App() {
             if (runId.current === id) setJob({ stage, progress });
           },
           () => runId.current !== id,
+          (partial) => {
+            if (runId.current !== id) return;
+            setPreview({
+              markdown: partial.markdown,
+              tiles: partial.tiles,
+              total: partial.total,
+            });
+          },
         );
         if (runId.current !== id) return;
 
         if (!output.markdown.trim()) {
+          setPreview(null);
           setJob(null);
           leaveAppend();
           setError({
@@ -371,6 +393,7 @@ export default function App() {
         setResult(final);
         setMarkdown(final.markdown);
         setTokens(final.tokens);
+        setPreview(null);
         setJob(null);
 
         const item: HistoryItem = {
@@ -392,6 +415,7 @@ export default function App() {
         setHistory(await addHistory(item));
       } catch (cause) {
         if (runId.current !== id) return;
+        setPreview(null);
         setJob(null);
         leaveAppend();
         setError({
@@ -646,6 +670,19 @@ export default function App() {
     };
   }, [outputText, result]);
 
+  // Follow the newest line of the live preview, unless the user scrolled up to
+  // read a section that has already been read.
+  useEffect(() => {
+    const node = previewRef.current;
+    if (node && previewPinned.current) node.scrollTop = node.scrollHeight;
+  }, [preview]);
+
+  const handlePreviewScroll = () => {
+    const node = previewRef.current;
+    if (!node) return;
+    previewPinned.current = node.scrollHeight - node.scrollTop - node.clientHeight < 24;
+  };
+
   /* --------------------------------------------------------------- actions */
 
   const cancel = () => {
@@ -654,6 +691,8 @@ export default function App() {
       void chrome.runtime.sendMessage({ type: MSG.cancelFull }).catch(() => {});
     }
     runId.current++;
+    previewPinned.current = true;
+    setPreview(null);
     setJob(null);
     leaveAppend();
   };
@@ -665,6 +704,8 @@ export default function App() {
     pageCache.current = null;
     setAppendMode(false);
     setJob(null);
+    previewPinned.current = true;
+    setPreview(null);
     setResult(null);
     setMarkdown('');
     setTokens(0);
@@ -980,6 +1021,26 @@ export default function App() {
             <div className="bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(job.progress * 100)}>
               <span className="bar-fill" style={{ width: `${Math.max(4, job.progress * 100)}%` }} />
             </div>
+            {preview && (
+              <div className="progress-preview">
+                <div className="progress-preview-head">
+                  <span>Live preview</span>
+                  <span>
+                    {preview.tiles} of {preview.total} tiles
+                  </span>
+                </div>
+                <pre
+                  ref={previewRef}
+                  className="progress-preview-body"
+                  tabIndex={0}
+                  role="region"
+                  aria-label="Live preview of the page read so far"
+                  onScroll={handlePreviewScroll}
+                >
+                  {preview.markdown}
+                </pre>
+              </div>
+            )}
             <button type="button" className="btn btn-ghost btn-sm" onClick={cancel}>
               Cancel
             </button>

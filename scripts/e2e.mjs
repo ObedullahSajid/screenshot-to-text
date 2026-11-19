@@ -577,6 +577,7 @@ try {
       return tile.toDataURL('image/jpeg', 0.92);
     };
 
+    const partials = [];
     const output = await debug.runTiledPipeline(
       {
         tiles: [
@@ -590,6 +591,12 @@ try {
       { compact: true, maxWidth: 2400 },
       () => {},
       () => false,
+      (partial) =>
+        partials.push({
+          tiles: partial.tiles,
+          total: partial.total,
+          markdown: partial.markdown,
+        }),
     );
 
     const found = [...output.markdown.matchAll(/Row (\d{2})/g)].map((match) => match[1]);
@@ -600,6 +607,7 @@ try {
       width: output.width,
       height: output.height,
       imageTokens: output.imageTokens,
+      partials,
     };
   });
 
@@ -609,6 +617,20 @@ try {
     ).join(',');
     check('tiled OCR keeps all 40 rows once', tiled.found.length === 40 && tiled.unique === 40);
     check('tiled OCR keeps reading order', tiled.found.join(',') === expected);
+    check(
+      'the live preview grows a tile at a time',
+      tiled.partials.length >= 1 &&
+        tiled.partials.every(
+          (partial, index) =>
+            partial.total === 2 &&
+            partial.tiles > (tiled.partials[index - 1]?.tiles ?? 0),
+        ) &&
+        tiled.partials[tiled.partials.length - 1].tiles === 2,
+    );
+    check(
+      'the first preview holds the top of the page',
+      tiled.partials.length >= 1 && /Row 01/.test(tiled.partials[0].markdown),
+    );
     check(
       'tiled result measures the whole page',
       tiled.width === 900 &&

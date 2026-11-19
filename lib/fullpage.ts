@@ -172,6 +172,17 @@ export function restoreFullPage(
 
 /* ------------------------------------------------------------- line stitching */
 
+/**
+ * Length of the run of present entries from the start. A progressive preview
+ * uses this to publish only a complete top-of-page prefix: if tile 2 finishes
+ * before tile 1, the preview waits rather than showing a floating fragment.
+ */
+export function contiguousPrefix<T>(entries: Array<T | null>): number {
+  let index = 0;
+  while (index < entries.length && entries[index] !== null) index++;
+  return index;
+}
+
 export interface TileInput {
   page: OcrPage;
   /** Scroll offset of this tile, in CSS pixels. */

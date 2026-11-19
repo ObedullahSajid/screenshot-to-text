@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planTiles, stitchTiles } from '../lib/fullpage.ts';
+import { contiguousPrefix, planTiles, stitchTiles } from '../lib/fullpage.ts';
 import { makeLine, makePage, makeParagraph } from './helpers.mjs';
 
 test('tile offsets start at the top and end at the page bottom', () => {
@@ -32,6 +32,14 @@ test('a tiny viewport still advances without skipping a strip', () => {
 
   assert.ok(step > 0);
   assert.ok(step <= 100);
+});
+
+test('the preview prefix stops at the first unfinished tile', () => {
+  // Tiles may finish out of order; only a run from the top is safe to show.
+  assert.equal(contiguousPrefix([{}, {}, {}, {}]), 4);
+  assert.equal(contiguousPrefix([{}, {}, null, {}]), 2);
+  assert.equal(contiguousPrefix([null, {}, {}]), 0);
+  assert.equal(contiguousPrefix([]), 0);
 });
 
 function tilePage(lines) {

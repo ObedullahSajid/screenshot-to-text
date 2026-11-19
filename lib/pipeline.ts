@@ -13,7 +13,7 @@ import {
   type PreparedImage,
 } from './preprocess';
 import { countTextTokens, estimateImageTokens } from './tokens';
-import { stitchTiles } from './fullpage';
+import { contiguousPrefix, stitchTiles } from './fullpage';
 
 export interface PipelineOptions {
   compact: boolean;
@@ -95,6 +95,20 @@ export interface TiledCapture {
   scrollHeight: number;
   /** Viewport width in CSS pixels. */
   viewportWidth: number;
+}
+
+/**
+ * A growing top-of-page result, published while a full-page capture is still
+ * being read. It covers the first `tiles` tiles only, so it is a real prefix of
+ * the final page rather than a snapshot of whichever tiles happened to finish.
+ */
+export interface TiledPartial {
+  markdown: string;
+  rawText: string;
+  stats: LayoutResult['stats'];
+  /** Contiguous tiles from the top that this preview covers. */
+  tiles: number;
+  total: number;
 }
 
 interface Candidate {
@@ -186,6 +200,7 @@ export async function runTiledPipeline(
   options: PipelineOptions,
   onProgress: OcrProgress,
   isCancelled: () => boolean = () => false,
+  onPartial?: (partial: TiledPartial) => void,
 ): Promise<PipelineOutput> {
   const { tiles } = capture;
   if (!tiles.length) throw new Error('No tiles were captured.');
@@ -224,6 +239,44 @@ export async function runTiledPipeline(
     const done = `${completed} of ${tiles.length} done`;
     const prefix = tiles.length === 1 ? 'Reading tile' : 'Reading tiles';
     onProgress(stage ? `${stage} · ${done}` : `${prefix} · ${done}`, lastProgress);
+  };
+
+  const asTileInput = (entry: TileRecognition) => ({
+    page: entry.page,
+    offset: entry.offset,
+    dpr: capture.dpr,
+    scale: entry.scale,
+    index: entry.index,
+  });
+
+  let previewed = 0;
+
+  /**
+   * Publishes the top of the page as tiles complete. The prefix is re-stitched
+   * from scratch, not appended to, so a seam is de-duplicated and a paragraph
+   * crossing it is merged exactly as the final pass will do it.
+   */
+  const publishPartial = () => {
+    if (!onPartial) return;
+    const prefix = contiguousPrefix(recognitions);
+    if (prefix <= previewed) return;
+    previewed = prefix;
+
+    const read = recognitions
+      .slice(0, prefix)
+      .filter((entry): entry is TileRecognition => entry !== null);
+    const stitched = stitchTiles(read.map(asTileInput));
+    const rendered = renderPage(stitched.page, options);
+    // A page that starts with a hero image has nothing to preview yet; the next
+    // tile will publish.
+    if (!rendered.markdown.trim()) return;
+    onPartial({
+      markdown: rendered.markdown,
+      rawText: rendered.rawText,
+      stats: rendered.stats,
+      tiles: prefix,
+      total: tiles.length,
+    });
   };
 
   /**
@@ -270,6 +323,7 @@ export async function runTiledPipeline(
         inFlight.delete(slot);
         completed++;
         publish();
+        publishPartial();
         continue;
       }
 
@@ -302,6 +356,7 @@ export async function runTiledPipeline(
       inFlight.delete(slot);
       completed++;
       publish();
+      publishPartial();
     }
   };
 
@@ -340,15 +395,7 @@ export async function runTiledPipeline(
 
   onProgress('Stitching tiles', 0.9);
   const read = recognitions.filter((entry): entry is TileRecognition => entry !== null);
-  const stitched = stitchTiles(
-    read.map((entry) => ({
-      page: entry.page,
-      offset: entry.offset,
-      dpr: capture.dpr,
-      scale: entry.scale,
-      index: entry.index,
-    })),
-  );
+  const stitched = stitchTiles(read.map(asTileInput));
 
   onProgress('Rebuilding layout', 0.93);
   const page = stitched.page;

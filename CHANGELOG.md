@@ -5,6 +5,18 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Full-page captures now show a live preview while the page is read. As tiles
+  finish, the contiguous prefix from the top of the page is stitched and
+  rendered into the progress card, so the beginning of the document is readable
+  before the capture is complete. The preview follows the newest line unless you
+  scroll up to read an earlier section, and the final stitched result replaces
+  it. The two-tile e2e run checks that previews grow a tile at a time from the
+  top.
+
 ## [0.3.0] - 2026-11-19
 
 ### Changed
