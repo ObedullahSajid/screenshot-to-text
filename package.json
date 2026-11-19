@@ -1,6 +1,6 @@
 {
   "name": "screenshot-to-text",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "On-device OCR that turns screenshots into layout-preserving Markdown for AI agents.",
