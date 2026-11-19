@@ -272,6 +272,194 @@ export function isBlankCanvas(canvas: HTMLCanvasElement): boolean {
   return looksBlank(ctx.getImageData(0, 0, size, size).data, size, size);
 }
 
+/* --------------------------------------------------------- adaptive width */
+
+/**
+ * The lowest width a wide capture is ever lowered to. Below this, Tesseract
+ * loses small text faster than it gains from the smaller image: on a 2560 px
+ * page, 1600 px halved the time for 22 px text but dropped row recall from
+ * 1.00 to 0.27 for 14 px text.
+ */
+export const OCR_WIDTH_FLOOR = 1600;
+
+/** Row height at the floor width below which the text is too small to shrink. */
+const MIN_TEXT_HEIGHT = 12;
+
+/** Fewer lines than this and the probe is guessing, so keep the wider read. */
+const MIN_PROBE_LINES = 4;
+
+/** Same ink tolerance as the blank-page test: ignore compression noise. */
+const PROBE_TOLERANCE = 24;
+
+/** A row needs this share of its pixels inked to belong to a text line. */
+const PROBE_ROW_INK = 0.004;
+
+/** Hairlines and rules are not text; ignore bands this thin. */
+const MIN_BAND_HEIGHT = 3;
+
+/** Ceiling for the probe canvas, so a tall capture is not decoded twice at full size. */
+const MAX_PROBE_PIXELS = 3_000_000;
+
+export interface LineProfile {
+  /** Number of text rows found. */
+  lines: number;
+  /** 25th-percentile row height, in pixels of the measured image. */
+  low: number;
+  /** Median row height, in pixels of the measured image. */
+  median: number;
+  /** Median distance between the starts of consecutive rows. */
+  pitch: number;
+}
+
+/**
+ * Measures how tall the text rows are by profiling ink per row. Row height is
+ * a better signal than font size or line spacing: it follows the glyphs
+ * themselves and does not care how much leading the page uses.
+ *
+ * The 25th percentile is reported alongside the median because a page can mix
+ * headings with dense body text, and the dense text is what decides whether the
+ * capture survives a downscale.
+ */
+export function measureLineBands(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+): LineProfile {
+  const empty: LineProfile = { lines: 0, low: 0, median: 0, pitch: 0 };
+  if (width < 3 || height < 3) return empty;
+
+  const pixels = Math.min(width * height, data.length >> 2);
+  const histogram = new Uint32Array(256);
+  for (let p = 0; p < pixels; p++) {
+    const index = p * 4;
+    const value =
+      ((data[index] * 299 + data[index + 1] * 587 + data[index + 2] * 114) / 1000) | 0;
+    histogram[value]++;
+  }
+
+  let background = 0;
+  for (let value = 1; value < 256; value++) {
+    if (histogram[value] > histogram[background]) background = value;
+  }
+
+  // Count ink per row, then join consecutive inked rows into bands. A blank gap
+  // closes a band, which is what separates two lines of text even at tight
+  // leading.
+  const rowInk = new Uint32Array(height);
+  for (let p = 0; p < pixels; p++) {
+    const index = p * 4;
+    const value =
+      ((data[index] * 299 + data[index + 1] * 587 + data[index + 2] * 114) / 1000) | 0;
+    if (Math.abs(value - background) > PROBE_TOLERANCE) {
+      rowInk[(p / width) | 0]++;
+    }
+  }
+
+  const minInk = Math.max(2, Math.ceil(width * PROBE_ROW_INK));
+  const bands: Array<{ start: number; height: number }> = [];
+  let start = -1;
+  for (let y = 0; y <= height; y++) {
+    const inked = y < height && rowInk[y] >= minInk;
+    if (inked && start < 0) start = y;
+    if (!inked && start >= 0) {
+      const bandHeight = y - start;
+      if (bandHeight >= MIN_BAND_HEIGHT) bands.push({ start, height: bandHeight });
+      start = -1;
+    }
+  }
+
+  if (bands.length < MIN_PROBE_LINES) {
+    return { ...empty, lines: bands.length };
+  }
+
+  const heights = bands.map((band) => band.height).sort((a, b) => a - b);
+  const pitches: number[] = [];
+  for (let index = 1; index < bands.length; index++) {
+    pitches.push(bands[index].start - bands[index - 1].start);
+  }
+  pitches.sort((a, b) => a - b);
+
+  return {
+    lines: bands.length,
+    low: percentile(heights, 0.25),
+    median: percentile(heights, 0.5),
+    pitch: percentile(pitches, 0.5),
+  };
+}
+
+/**
+ * The width to hand `prepareImage` for a capture. Wide captures are lowered to
+ * the floor only when the probe finds several lines whose height still leaves
+ * Tesseract enough pixels; anything uncertain keeps the preferred width.
+ *
+ * `profile` must describe the capture at the floor width (callers scale a
+ * smaller probe up), so `low` is in floor-width pixels.
+ */
+export function pickOcrWidth(profile: LineProfile, preferred: number): number {
+  if (preferred <= OCR_WIDTH_FLOOR) return preferred;
+  if (profile.lines < MIN_PROBE_LINES || profile.low <= 0) return preferred;
+  return profile.low >= MIN_TEXT_HEIGHT ? OCR_WIDTH_FLOOR : preferred;
+}
+
+/**
+ * Runs the probe on a copy capped at the floor width. The probe is a plain
+ * downscale with no contrast work: line height survives scaling, and this keeps
+ * the cost to one `drawImage` plus a pixel pass before the real preparation.
+ */
+export function adaptiveMaxWidth(
+  image: HTMLImageElement | ImageBitmap,
+  preferred = 2400,
+): number {
+  if (preferred <= OCR_WIDTH_FLOOR) return preferred;
+
+  const srcW = 'naturalWidth' in image ? image.naturalWidth : image.width;
+  const srcH = 'naturalHeight' in image ? image.naturalHeight : image.height;
+  // At or below the floor the cap cannot bind: the capture is already read at
+  // its own size (or upscaled from a tiny crop), so there is nothing to lower.
+  if (srcW <= OCR_WIDTH_FLOOR) return preferred;
+
+  let probeW = OCR_WIDTH_FLOOR;
+  let probeH = Math.max(1, Math.round((srcH * probeW) / srcW));
+  if (probeW * probeH > MAX_PROBE_PIXELS) {
+    const k = Math.sqrt(MAX_PROBE_PIXELS / (probeW * probeH));
+    probeW = Math.max(1, Math.round(probeW * k));
+    probeH = Math.max(1, Math.round(probeH * k));
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = probeW;
+  canvas.height = probeH;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return preferred;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(image, 0, 0, probeW, probeH);
+
+  const data = ctx.getImageData(0, 0, probeW, probeH).data;
+  const profile = measureLineBands(data, probeW, probeH);
+  // A height-capped probe is narrower than the floor; line heights must be
+  // scaled to the pixels OCR would actually see.
+  const k = OCR_WIDTH_FLOOR / probeW;
+  return pickOcrWidth(
+    {
+      ...profile,
+      low: profile.low * k,
+      median: profile.median * k,
+      pitch: profile.pitch * k,
+    },
+    preferred,
+  );
+}
+
+/** Linear-interpolated percentile of a sorted array. */
+function percentile(sorted: number[], q: number): number {
+  if (!sorted.length) return 0;
+  const position = (sorted.length - 1) * q;
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
+}
+
 /** Maps 0-255 through a 256-entry lookup table. */
 function buildLinearLevels(low: number, high: number): Uint8ClampedArray {
   const span = Math.max(1, high - low);

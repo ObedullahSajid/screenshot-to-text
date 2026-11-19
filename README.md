@@ -30,7 +30,7 @@ The extension keeps what matters to a model — headings, lists, tables, code, r
 - **Layout reconstruction**: headings, bullet/numbered lists (including nested ones), pipe tables, fenced code blocks (with indentation), paragraph re-flowing, de-hyphenation, CJK-aware spacing.
 - **Reading order that survives columns**: a two-column article is read down the first column and then down the second, not row by row.
 - **Label/value pairing**: a settings panel or a receipt comes out as `Compact output: On` instead of a table with a made-up header row. Stacked form fields (`Email: ada@example.com`) are grouped by their label/value rhythm.
-- **Smart preprocessing**: contrast stretch, contrast-limited equalisation for flat/grey-on-grey captures, automatic inversion for dark-mode screenshots, tiny-crop upscaling, pixel cap for huge captures.
+- **Smart preprocessing**: contrast stretch, contrast-limited equalisation for flat/grey-on-grey captures, automatic inversion for dark-mode screenshots, tiny-crop upscaling, pixel cap for huge captures, and adaptive OCR width: a wide capture is probed at 1600 px and only downscaled when its text rows are tall enough to stay legible.
 - **Fast first result**: the OCR engine and token vocabulary load while the panel is idle, blank tiles are skipped instead of being read, and a region edit that only drops whole lines never runs OCR again.
 - **Quality hints**: a soft-capture warning, a "low contrast boosted" note, and "re-read at higher detail" when a second OCR pass was needed.
 - **Editable result** with a live token count and an "82% smaller than image" meter.
@@ -285,7 +285,7 @@ lib/
   layout/rebuild.ts      OCR geometry → Markdown
   layout/filter.ts       keep/exclude boxes applied to a recognised page (no OCR)
   regions.ts             apply keep/exclude boxes and stack kept areas
-  preprocess.ts          quality metrics, contrast/equalisation, invert, resize, thumbnails
+  preprocess.ts          quality metrics, contrast/equalisation, invert, resize, adaptive OCR width, thumbnails
   clean.ts               compaction pass (fence-aware)
   format.ts              Markdown → plain-text / outline presets
   merge.ts               append two captures, de-duplicate the seam
@@ -392,7 +392,7 @@ It writes:
 
 The benchmark scores phrase recall plus structural checks (heading, bullet, nested bullet, numbered list, table, padded row, empty middle cell, label/value pair, stacked form field, column order, column + table order, fence, indentation, quality notes) per fixture, reports confidence, sharpness, contrast and timing, and writes `.output/bench/benchmark.{json,md}` together with each rendered PNG and its Markdown. A gated fixture must reach 0.75 recall and pass every structural check; `--only=table,list` runs a subset. A snapshot on a normal desktop: 0.99 gated recall, under a second per capture after the engine is warm.
 
-`npm run bench` measures where the time goes: engine cold start, the tokenizer, each pipeline stage, a region edit, and a long page read once and then twice in parallel, asserting the two Markdown outputs are identical. It then sweeps the OCR width cap over a wide page with large and dense text. It writes `.output/bench/timing.{json,md}` plus the Markdown of the stitched page, and enforces nothing — timings vary by machine, so the numbers are for comparing changes on the same machine. `--tiles=9` makes the long page longer; the reported heap is the panel's JavaScript heap and excludes the OCR workers, which live in their own processes. The width sweep is the guard for a future default change: on a 2560 px page, 1600 px halved the time for 22 px text with identical output, but dropped row recall from 1.00 to 0.27 on 14 px text, which is why the default stays at 2400 px.
+`npm run bench` measures where the time goes: engine cold start, the tokenizer, each pipeline stage, a region edit, and a long page read once and then twice in parallel, asserting the two Markdown outputs are identical. It then sweeps the OCR width cap over wide pages with large and dense text, and finally reads both pages with adaptive width enabled, reporting the width each capture chose. It writes `.output/bench/timing.{json,md}` plus the Markdown of the stitched page, and enforces nothing — timings vary by machine, so the numbers are for comparing changes on the same machine. `--tiles=9` makes the long page longer; the reported heap is the panel's JavaScript heap and excludes the OCR workers, which live in their own processes. The width sweep is the guard for the adaptive rule: on a 2560 px page, 1600 px halved the time for 22 px text with identical output, but dropped row recall from 1.00 to 0.27 on 14 px text. Adaptive lowering therefore probes the capture at 1600 px and keeps the preferred width unless the measured lines are still at least 12 px tall.
 
 Debug a layout change without rebuilding the extension:
 

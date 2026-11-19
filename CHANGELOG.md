@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Wide captures now choose their OCR width from the image itself. A copy capped
+  at 1600 px profiles ink per row and measures the text rows; when several lines
+  are still at least 12 px tall, the capture is read at 1600 px instead of the
+  preferred width. Small or dense text, too few detected lines and captures that
+  are already narrow keep the preferred width, so the 14 px case that loses
+  recall at 1600 px is left alone. On the benchmark's 22 px page this cuts the
+  read from 13.1 s to 9.1 s with identical output and full row recall, and
+  `npm run bench` now reports the width each wide page chose. Two end-to-end
+  checks cover the real canvas path: large text is lowered, dense text is not.
+
 ## [0.2.0] - 2026-11-19
 
 ### Added

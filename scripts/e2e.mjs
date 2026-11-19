@@ -617,6 +617,65 @@ try {
         tiled.imageTokens > 0,
     );
   }
+
+  // Adaptive width, through the real canvas path: the same 2400 px capture is
+  // lowered for large text and kept at the preferred width for dense text.
+  const adaptive = await debugPage.evaluate(async () => {
+    const debug = window.__sttDebug;
+    if (!debug) return null;
+
+    const build = (fontSize, rows) => {
+      const width = 2400;
+      const pitch = Math.round(fontSize * 1.9);
+      const height = 60 + rows * pitch;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, width, height);
+      ctx.fillStyle = '#111111';
+      ctx.textBaseline = 'top';
+      ctx.font = `${fontSize}px Arial`;
+      for (let index = 0; index < rows; index++) {
+        const number = String(index + 1).padStart(2, '0');
+        ctx.fillText(`Row ${number} adaptive width check`, 40, 30 + index * pitch);
+      }
+      return canvas.toDataURL('image/png');
+    };
+
+    const read = async (dataUrl) => {
+      const output = await debug.runPipeline(
+        dataUrl,
+        { compact: true, maxWidth: 2400 },
+        () => {},
+      );
+      const found = new Set(
+        [...output.markdown.matchAll(/Row\s*(\d{2})/g)].map((match) => Number(match[1])),
+      );
+      // `scale` is prepared pixels per captured pixel, so it reveals the width
+      // the probe chose without a new API.
+      return { width: Math.round(output.scale * 2400), rows: found.size };
+    };
+
+    return {
+      large: await read(build(30, 8)),
+      dense: await read(build(14, 8)),
+    };
+  });
+
+  if (adaptive) {
+    check(
+      'large text on a wide capture is read at the 1600 px floor',
+      adaptive.large.width === 1600 && adaptive.large.rows === 8,
+    );
+    check(
+      'dense text on a wide capture keeps the preferred width',
+      adaptive.dense.width === 2400 && adaptive.dense.rows === 8,
+    );
+    if (adaptive.large.width !== 1600) console.log('adaptive large:', adaptive.large);
+    if (adaptive.dense.width !== 2400) console.log('adaptive dense:', adaptive.dense);
+  }
   await debugPage.close();
 
   /* --------------------------------------------------------------- CSP */

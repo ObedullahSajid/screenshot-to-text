@@ -73,6 +73,15 @@ function median(values) {
   return sorted[Math.floor(sorted.length / 2)];
 }
 
+/** Share of numbered rows the Markdown kept. */
+function rowRecall(markdown, rows) {
+  const found = new Set([...markdown.matchAll(/Row\s*(\d{2})/g)].map((match) => Number(match[1])));
+  return (
+    Array.from({ length: rows }, (_, index) => index + 1).filter((row) => found.has(row)).length /
+    rows
+  );
+}
+
 /** A tall document sliced into overlapping viewport tiles. */
 async function buildLongPage(renderPage, tileCount) {
   return renderPage.evaluate((count) => {
@@ -221,7 +230,7 @@ async function measureTiled(page, capture, options, workers) {
 await mkdir(OUT, { recursive: true });
 
 const session = await launch({ headless: process.env.HEADFUL !== '1' });
-const report = { generatedAt: new Date().toISOString(), runs: RUNS, fixtures: [], tiled: null, widthSweep: [] };
+const report = { generatedAt: new Date().toISOString(), runs: RUNS, fixtures: [], tiled: null, widthSweep: [], adaptiveWidth: [] };
 let exitCode = 0;
 
 try {
@@ -392,25 +401,43 @@ try {
       const samples = await measurePipeline(page, widePage.dataUrl, {
         compact: true,
         maxWidth: width,
+        // Force the width under test; adaptive lowering gets its own section.
+        adaptive: false,
       });
       const last = samples[samples.length - 1];
-      const found = new Set(
-        [...last.markdown.matchAll(/Row\s*(\d{2})/g)].map((match) => Number(match[1])),
-      );
-      const recall =
-        Array.from({ length: widePage.rows }, (_, index) => index + 1).filter((row) =>
-          found.has(row),
-        ).length / widePage.rows;
 
       report.widthSweep.push({
         page: widePage.id,
         maxWidth: width,
         totalMs: round(median(samples.map((sample) => sample.total))),
         words: last.stats.words,
-        recall,
+        recall: rowRecall(last.markdown, widePage.rows),
         confidence: last.stats.confidence,
       });
     }
+  }
+
+  /* ------------------------------------------------------- adaptive width */
+
+  for (const widePage of widePages) {
+    // Preferred width is 2400, but the probe may lower the capture to 1600.
+    // `scale` converts prepared pixels back to captured pixels, so it reveals
+    // the width the pipeline actually chose without a new API.
+    const samples = await measurePipeline(page, widePage.dataUrl, {
+      compact: true,
+      maxWidth: 2400,
+      adaptive: true,
+    });
+    const last = samples[samples.length - 1];
+
+    report.adaptiveWidth.push({
+      page: widePage.id,
+      chosenWidth: Math.round(last.scale * 2560),
+      totalMs: round(median(samples.map((sample) => sample.total))),
+      words: last.stats.words,
+      recall: rowRecall(last.markdown, widePage.rows),
+      confidence: last.stats.confidence,
+    });
   }
 } catch (error) {
   console.error(error);
@@ -456,6 +483,18 @@ const sweepTable = table(
   ]),
 );
 
+const adaptiveTable = table(
+  ['page', 'chosen width', 'total', 'words', 'row recall', 'confidence'],
+  report.adaptiveWidth.map((entry) => [
+    entry.page,
+    `${entry.chosenWidth} px`,
+    `${entry.totalMs} ms`,
+    entry.words,
+    entry.recall.toFixed(2),
+    entry.confidence,
+  ]),
+);
+
 const tiled = report.tiled;
 const regionText = report.regionEdit
   ? `region edit: ${report.regionEdit.ms} ms without OCR (first read: ${report.regionEdit.ocrMs} ms) · ${report.regionEdit.lines} lines kept, ${report.regionEdit.partial} partial`
@@ -491,6 +530,8 @@ console.log(`\n${regionText}`);
 console.log(`\nLong page (one vs two workers)\n${tiledText}\n`);
 console.log('Width sweep\n');
 console.log(sweepTable);
+console.log('\nAdaptive width (preferred 2400 px)\n');
+console.log(adaptiveTable);
 console.log('');
 
 const markdown = [
@@ -518,6 +559,12 @@ const markdown = [
   '',
   '```',
   sweepTable,
+  '```',
+  '',
+  '## Adaptive width',
+  '',
+  '```',
+  adaptiveTable,
   '```',
   '',
 ].join('\n');

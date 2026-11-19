@@ -10,7 +10,7 @@ does not match it.
 2. Bump `version` in `package.json`.
 3. Move the changelog entries under the new version with today's date in
    `CHANGELOG.md`, and update the compare link at the bottom.
-4. `npm run verify` — typecheck, build, offline guarantees, 61 e2e checks.
+4. `npm run verify` — typecheck, build, offline guarantees, 63 e2e checks.
 5. `npm run zip` → `.output/screenshot-to-text-<version>-chrome.zip`.
 6. Commit, tag, push:
 

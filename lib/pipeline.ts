@@ -4,6 +4,7 @@ import { workersForTiles } from './ocr/pool';
 import { rebuildLayout, type LayoutResult } from './layout/rebuild';
 import type { OcrPage } from './ocr/types';
 import {
+  adaptiveMaxWidth,
   prepareImage,
   isBlankCanvas,
   loadImage,
@@ -17,6 +18,12 @@ import { stitchTiles } from './fullpage';
 export interface PipelineOptions {
   compact: boolean;
   maxWidth: number;
+  /**
+   * Lower a wide capture's OCR width when a line-height probe says its text
+   * survives the downscale. On by default; the benchmark turns it off to sweep
+   * explicit widths.
+   */
+  adaptive?: boolean;
 }
 
 export const NEUTRAL_QUALITY: ImageQuality = {
@@ -118,7 +125,9 @@ export async function runPipeline(
   const width = image.naturalWidth;
   const height = image.naturalHeight;
 
-  const prepared = prepareImage(image, options.maxWidth);
+  const maxWidth =
+    options.adaptive === false ? options.maxWidth : adaptiveMaxWidth(image, options.maxWidth);
+  const prepared = prepareImage(image, maxWidth);
 
   // Nothing to read: a stray click, a paste of an empty canvas or a blank
   // stretch between sections. Skipping the pass keeps the worker idle.
@@ -237,7 +246,12 @@ export async function runTiledPipeline(
       if (!thumbBox.value) thumbBox.value = createPageThumb(capture, image);
       drawTileIntoThumb(thumbBox.value, image, tile.offset, capture.dpr);
 
-      const prepared = prepareImage(image, options.maxWidth);
+      const prepared = prepareImage(
+        image,
+        options.adaptive === false
+          ? options.maxWidth
+          : adaptiveMaxWidth(image, options.maxWidth),
+      );
 
       if (isBlankCanvas(prepared.canvas)) {
         // A blank stretch between sections costs nothing. The page still counts
