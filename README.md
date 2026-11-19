@@ -26,11 +26,12 @@ The extension keeps what matters to a model — headings, lists, tables, code, r
 - **Six ways to add a screenshot**: paste (`Ctrl+V`), drag & drop, file picker, region capture (`Ctrl+Shift+X`), the visible tab, or a scrolled **full page**.
 - **Page access stays opt-in**: Chrome only lets the extension read a tab after you invoke it there — toolbar icon, `Ctrl+Shift+X` or the context menu. No always-on host access, no install-time warning, and the panel says so when a capture needs that grant.
 - **Full-page capture**: one click scrolls the page and photographs each viewport with 140 px overlap. Lines are stitched by their page coordinates — not by joining Markdown — so a paragraph cut by a tile boundary is complete and appears once. Fixed headers are captured only on the first tile, and your scroll position is put back.
-- **Keep/exclude regions without recapturing**: open **Regions** on a result to draw as many boxes as you need. **Exclude** cuts out a nav bar or cookie banner; **Keep** reads only the boxes you choose and stacks them in reading order. Boxes can be moved, resized, nudged with the keyboard, or removed; the pipeline runs again on the untouched capture.
+- **Keep/exclude regions without recapturing**: open **Regions** on a result to draw as many boxes as you need. **Exclude** cuts out a nav bar or cookie banner; **Keep** reads only the boxes you choose and stacks them in reading order. Boxes can be moved, resized, nudged with the keyboard, or removed. An edit that only removes whole lines is applied to the recognised text itself, so it is instant instead of running OCR again; a box that cuts through a line re-reads the capture.
 - **Layout reconstruction**: headings, bullet/numbered lists (including nested ones), pipe tables, fenced code blocks (with indentation), paragraph re-flowing, de-hyphenation, CJK-aware spacing.
 - **Reading order that survives columns**: a two-column article is read down the first column and then down the second, not row by row.
 - **Label/value pairing**: a settings panel or a receipt comes out as `Compact output: On` instead of a table with a made-up header row. Stacked form fields (`Email: ada@example.com`) are grouped by their label/value rhythm.
 - **Smart preprocessing**: contrast stretch, contrast-limited equalisation for flat/grey-on-grey captures, automatic inversion for dark-mode screenshots, tiny-crop upscaling, pixel cap for huge captures.
+- **Fast first result**: the OCR engine and token vocabulary load while the panel is idle, blank tiles are skipped instead of being read, and a region edit that only drops whole lines never runs OCR again.
 - **Quality hints**: a soft-capture warning, a "low contrast boosted" note, and "re-read at higher detail" when a second OCR pass was needed.
 - **Editable result** with a live token count and an "82% smaller than image" meter.
 - **Four output views** — Markdown (editable), plain text (tab-separated tables, `•` bullets), outline (headings and list items only), and the raw OCR text. Copy and download follow the active view.
@@ -280,6 +281,7 @@ lib/
   ocr/engine.ts          Tesseract worker lifecycle + PSM switching (bundled worker/wasm/traineddata)
   ocr/types.ts           structural OCR types, decoupled from tesseract.js
   layout/rebuild.ts      OCR geometry → Markdown
+  layout/filter.ts       keep/exclude boxes applied to a recognised page (no OCR)
   regions.ts             apply keep/exclude boxes and stack kept areas
   preprocess.ts          quality metrics, contrast/equalisation, invert, resize, thumbnails
   clean.ts               compaction pass (fence-aware)
@@ -296,10 +298,12 @@ scripts/
   check-offline.mjs      asserts the CSP, permissions, bundled assets and licences
   fixtures.mjs           sixteen synthetic captures used by the benchmark
   benchmark.mjs          offline accuracy/timing benchmark
+  bench.mjs              per-stage timing harness (engine, OCR, tiles, width sweep)
   e2e.mjs                end-to-end test in real Chrome
   store-shots.mjs        renders the 1280 × 800 store screenshots
   lib/harness.mjs        shared Chrome launch/panel/fixture helpers
   debug-layout.mjs       dumps raw Tesseract geometry for the test fixture
+tests/                   Node unit tests (type-stripped), no browser required
 public/                  generated assets (icons, tessdata, tesseract core, licences)
 store/                   Chrome Web Store pack: listing, privacy, permissions, QA, screenshots
 .github/workflows/       verify (push/PR) and release (tag) pipelines
@@ -361,11 +365,13 @@ The pipeline always builds Markdown first, so structure is never lost. `lib/form
 
 ```bash
 npm run build
+npm run test           # unit tests for tiling, layout, regions and blank detection
 npm run check:offline  # CSP, permissions, bundled OCR assets
 npm run test:e2e       # headless Chrome; HEADFUL=1 for a visible window
 npm run benchmark      # accuracy/timing over sixteen synthetic captures
+npm run bench          # per-stage timings: engine, OCR, tiles, OCR width sweep
 npm run store:shots    # renders the 1280 × 800 Chrome Web Store screenshots
-npm run verify         # typecheck + build + offline check + e2e
+npm run verify         # typecheck + unit tests + build + offline check + e2e
 ```
 
 The e2e test loads the real extension, renders fixtures in the panel (a document with a table + list, and a dark-mode code screenshot) and checks the Markdown for headings, list items, table syntax, code fences and dark-mode inversion. It switches through the plain-text and outline presets, appends a second capture and asserts the shared lines appear once, and captures a settings panel to check the label/value pairing. It also opens the region editor, adds and resizes a box, applies it and confirms the pipeline re-ran, then cuts a banner out of a capture and keeps only the body.
@@ -383,6 +389,8 @@ It writes:
 - `.output/e2e-light.png`
 
 The benchmark scores phrase recall plus structural checks (heading, bullet, nested bullet, numbered list, table, padded row, empty middle cell, label/value pair, stacked form field, column order, column + table order, fence, indentation, quality notes) per fixture, reports confidence, sharpness, contrast and timing, and writes `.output/bench/benchmark.{json,md}` together with each rendered PNG and its Markdown. A gated fixture must reach 0.75 recall and pass every structural check; `--only=table,list` runs a subset. A snapshot on a normal desktop: 0.99 gated recall, under a second per capture after the engine is warm.
+
+`npm run bench` measures where the time goes: engine cold start, the tokenizer, each pipeline stage, a five-tile long page (per-tile OCR, stitch, layout) and a region edit, then sweeps the OCR width cap over a wide page with large and dense text. It writes `.output/bench/timing.{json,md}` plus the Markdown of the stitched page, and enforces nothing — timings vary by machine, so the numbers are for comparing changes on the same machine. The width sweep is the guard for a future default change: on a 2560 px page, 1600 px halved the time for 22 px text with identical output, but dropped row recall from 1.00 to 0.27 on 14 px text, which is why the default stays at 2400 px.
 
 Debug a layout change without rebuilding the extension:
 

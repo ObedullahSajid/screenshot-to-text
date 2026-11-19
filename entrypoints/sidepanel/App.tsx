@@ -2,14 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { imageSize, selectionToImageRect, toDataUrl } from '../../lib/preprocess';
 import {
   NEUTRAL_QUALITY,
+  renderPage,
   runPipeline,
   runTiledPipeline,
+  type PipelineOptions,
   type PipelineOutput,
   type TiledCapture,
 } from '../../lib/pipeline';
 import { composeRegions, type RegionBox } from '../../lib/regions';
-import { disposeEngine } from '../../lib/ocr/engine';
-import { countTextTokens } from '../../lib/tokens';
+import { coversFullFrame, filterPageByRegions } from '../../lib/layout/filter';
+import { disposeEngine, prewarmEngine } from '../../lib/ocr/engine';
+import { countTextTokens, warmTokenizer } from '../../lib/tokens';
 import { formatOutput, isOutputPreset, type OutputPreset } from '../../lib/format';
 import { combineStats, mergeOutputs } from '../../lib/merge';
 import {
@@ -72,6 +75,17 @@ interface Source {
   regions: RegionBox[];
 }
 
+/**
+ * A recognised capture that still holds every line: no exclusion and no
+ * cropping. Region edits are filtered against it instead of OCR'ing again.
+ */
+interface PageCache {
+  dataUrl: string;
+  page: NonNullable<PipelineOutput['page']>;
+  scale: number;
+  output: PipelineOutput;
+}
+
 type Overlay = 'none' | 'history' | 'settings';
 type View = OutputPreset | 'raw';
 
@@ -92,6 +106,31 @@ const VIEWS: Array<{ id: View; label: string; title: string }> = [
   { id: 'outline', label: 'Outline', title: 'Headings and list items only' },
   { id: 'raw', label: 'Raw', title: 'Raw OCR text' },
 ];
+
+/**
+ * Re-renders a cached page under new keep/exclude boxes. Returns null when the
+ * boxes cut through lines, because a clipped line is not the text the user
+ * expects and only a real read can resolve it.
+ */
+async function regionsFromCache(
+  cache: PageCache | null,
+  dataUrl: string,
+  regions: RegionBox[],
+  options: PipelineOptions,
+): Promise<PipelineOutput | null> {
+  if (!cache || cache.dataUrl !== dataUrl) return null;
+  const filtered = filterPageByRegions(cache.page, regions, cache.scale);
+  if (filtered.partial > 0) return null;
+
+  const rendered = renderPage(filtered.page, options);
+  return {
+    ...cache.output,
+    markdown: rendered.markdown,
+    rawText: rendered.rawText,
+    stats: rendered.stats,
+    tokens: await countTextTokens(rendered.markdown),
+  };
+}
 
 export default function App() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
@@ -122,6 +161,7 @@ export default function App() {
   const fullBusy = useRef(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const appendBase = useRef<AppendBase | null>(null);
+  const pageCache = useRef<PageCache | null>(null);
 
   /* ------------------------------------------------------------- pipeline */
 
@@ -141,7 +181,12 @@ export default function App() {
   }, []);
 
   const run = useCallback(
-    async (dataUrl: string, regions: RegionBox[]) => {
+    async (
+      dataUrl: string,
+      regions: RegionBox[],
+      size: { width: number; height: number },
+      reuseRecognised = false,
+    ) => {
       const id = ++runId.current;
       const base = appendBase.current;
       setError(null);
@@ -158,14 +203,31 @@ export default function App() {
       setJob({ stage: 'Preparing image', progress: 0.02 });
 
       try {
-        const composed = await composeRegions(dataUrl, regions);
-        const output = await runPipeline(
-          composed.blob,
-          { compact: settings.compact, maxWidth: settings.maxWidth },
-          (stage, progress) => {
+        const options = { compact: settings.compact, maxWidth: settings.maxWidth };
+
+        // A region edit on a page that was already read is a filter over the
+        // recognised lines, not another OCR pass. Partial lines fall through to
+        // the full path below.
+        let output = reuseRecognised
+          ? await regionsFromCache(pageCache.current, dataUrl, regions, options)
+          : null;
+
+        if (!output) {
+          const composed = await composeRegions(dataUrl, regions);
+          output = await runPipeline(composed.blob, options, (stage, progress) => {
             if (runId.current === id) setJob({ stage, progress });
-          },
-        );
+          });
+          if (runId.current !== id) return;
+
+          if (!reuseRecognised) {
+            // Only a page that still contains the whole capture can answer a
+            // later keep/exclude edit.
+            pageCache.current =
+              !base && output.page && coversFullFrame(regions, size.width, size.height)
+                ? { dataUrl, page: output.page, scale: output.scale ?? 1, output }
+                : null;
+          }
+        }
         if (runId.current !== id) return;
 
         if (!output.markdown.trim()) {
@@ -256,6 +318,7 @@ export default function App() {
       setRegionsOpen(false);
       setFullNote(note);
       setMergeNote(null);
+      pageCache.current = null;
       setJob({ stage: 'Reading tile 1', progress: 0.04 });
 
       try {
@@ -403,7 +466,7 @@ export default function App() {
         ? [{ ...selectionToImageRect(selection, width, height), mode: 'keep' }]
         : [];
       setSource({ dataUrl, width, height, regions });
-      await run(dataUrl, regions);
+      await run(dataUrl, regions, { width, height });
     },
     [run],
   );
@@ -481,6 +544,32 @@ export default function App() {
 
   // Release the OCR worker's memory when the panel is closed.
   useEffect(() => () => void disposeEngine(), []);
+
+  /**
+   * Load the engine and the token vocabulary while the panel is idle, so the
+   * first capture does not pay for ~8 MB of parsing. The query switch lets the
+   * timing benchmark measure a genuinely cold start.
+   */
+  useEffect(() => {
+    if (!ready) return;
+    if (new URLSearchParams(window.location.search).has('nowarm')) return;
+
+    let cancelled = false;
+    const warm = () => {
+      if (cancelled) return;
+      prewarmEngine();
+      void warmTokenizer();
+    };
+
+    // A panel opened and closed quickly should not pay for a warm-up it never
+    // uses, hence both the idle deadline and the cancellation.
+    const handle = window.requestIdleCallback(warm, { timeout: 2500 });
+
+    return () => {
+      cancelled = true;
+      window.cancelIdleCallback(handle);
+    };
+  }, [ready]);
 
   useEffect(() => {
     if (!ready) return;
@@ -573,6 +662,7 @@ export default function App() {
     runId.current++;
     fullBusy.current = false;
     appendBase.current = null;
+    pageCache.current = null;
     setAppendMode(false);
     setJob(null);
     setResult(null);
@@ -608,12 +698,13 @@ export default function App() {
     setMergeNote(null);
     setJob(null);
     setRegionsOpen(false);
+    pageCache.current = null;
   };
 
   const applyRegions = (next: RegionBox[]) => {
     if (!source) return;
     setSource({ ...source, regions: next });
-    void run(source.dataUrl, next);
+    void run(source.dataUrl, next, { width: source.width, height: source.height }, true);
   };
 
   const copy = async () => {
@@ -668,6 +759,7 @@ export default function App() {
     setOverlay('none');
     // History entries keep the text, not the original pixels.
     setSource(null);
+    pageCache.current = null;
   };
 
   const drop = (event: React.DragEvent) => {

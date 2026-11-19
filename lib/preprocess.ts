@@ -217,6 +217,61 @@ export function prepareImage(
   };
 }
 
+/**
+ * A tile with no ink is not worth a Tesseract pass. A downscaled copy is enough
+ * to tell a blank stretch of page from text: only pixels that clearly differ
+ * from the page background count as ink.
+ *
+ * The threshold is deliberately conservative. Missing an opportunity to skip a
+ * blank tile costs a second; skipping a tile that held faint text loses it.
+ */
+const BLANK_TOLERANCE = 24;
+const BLANK_INK_RATIO = 0.001;
+
+export function looksBlank(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+): boolean {
+  const pixels = Math.max(1, width * height);
+  const histogram = new Uint32Array(256);
+  for (let index = 0, p = 0; index < data.length && p < pixels; index += 4, p++) {
+    const value =
+      ((data[index] * 299 + data[index + 1] * 587 + data[index + 2] * 114) / 1000) | 0;
+    histogram[value]++;
+  }
+
+  // The most common luminance is the page background, in light and dark mode.
+  let background = 0;
+  for (let value = 1; value < 256; value++) {
+    if (histogram[value] > histogram[background]) background = value;
+  }
+
+  let ink = 0;
+  for (let value = 0; value < 256; value++) {
+    if (histogram[value] && Math.abs(value - background) > BLANK_TOLERANCE) {
+      ink += histogram[value];
+    }
+  }
+
+  return ink / pixels < BLANK_INK_RATIO;
+}
+
+/**
+ * Checks a prepared canvas for content. Sampling at 64 px keeps the cost near a
+ * single drawImage, even for a 2400 px tile.
+ */
+export function isBlankCanvas(canvas: HTMLCanvasElement): boolean {
+  const size = 64;
+  const sample = document.createElement('canvas');
+  sample.width = size;
+  sample.height = size;
+  const ctx = sample.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return false;
+  ctx.drawImage(canvas, 0, 0, size, size);
+  return looksBlank(ctx.getImageData(0, 0, size, size).data, size, size);
+}
+
 /** Maps 0-255 through a 256-entry lookup table. */
 function buildLinearLevels(low: number, high: number): Uint8ClampedArray {
   const span = Math.max(1, high - low);

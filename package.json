@@ -13,11 +13,13 @@
     "predev": "node scripts/copy-assets.mjs",
     "prebuild": "node scripts/copy-assets.mjs",
     "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test \"tests/*.test.mjs\"",
     "test:e2e": "node scripts/e2e.mjs",
     "check:offline": "node scripts/check-offline.mjs",
     "benchmark": "node scripts/benchmark.mjs",
+    "bench": "node scripts/bench.mjs",
     "store:shots": "node scripts/store-shots.mjs",
-    "verify": "npm run typecheck && npm run build && npm run check:offline && npm run test:e2e",
+    "verify": "npm run typecheck && npm run test && npm run build && npm run check:offline && npm run test:e2e",
     "debug:layout": "node scripts/debug-layout.mjs"
   },
   "dependencies": {

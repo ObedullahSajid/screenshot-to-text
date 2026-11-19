@@ -102,6 +102,17 @@ export async function recognizeOnce(
   }
 }
 
+/**
+ * Starts loading the worker in the background. The first capture otherwise pays
+ * for the ~7 MB wasm core and language model on the critical path.
+ */
+export function prewarmEngine(): void {
+  void getEngine().catch(() => {
+    // A failure here is not fatal: the next capture reports it properly, with
+    // the panel's own error UI around it.
+  });
+}
+
 /** Frees the ~100 MB the worker holds. Call when the panel is closed. */
 export async function disposeEngine(): Promise<void> {
   if (!enginePromise) return;

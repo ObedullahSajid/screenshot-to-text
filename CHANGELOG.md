@@ -5,6 +5,33 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Browser-free unit tests** (`npm run test`): tiling maths, the partial-grid
+  rule, keep/exclude filtering, blank-page detection and compaction.
+- **Per-stage timing harness** (`npm run bench`): engine cold start, tokenizer,
+  each pipeline stage, a five-tile page and an OCR width sweep, written to
+  `.output/bench/timing.{json,md}`.
+
+### Changed
+
+- The OCR worker and token vocabulary now load while the panel is idle, so the
+  first capture no longer pays their start-up.
+- Keep/exclude edits that only remove whole lines are applied to the recognised
+  page and re-rendered, instead of reading the capture again (2 ms instead of
+  ~450 ms on a small screenshot). A box that cuts through a line still triggers
+  a full read, so no line is silently clipped.
+- Blank tiles in a full-page capture are skipped instead of being passed to
+  Tesseract.
+
+### Notes
+
+- The 2400 px OCR cap stays the default. The width sweep showed 1600 px is 36%
+  faster on a 2560 px page of 22 px text with identical output, but dense 14 px
+  text lost most of its rows at that size.
+
 ## [0.1.0] - 2026-11-13
 
 First public release. Chrome-only, runs entirely on the device.

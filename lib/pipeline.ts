@@ -4,6 +4,7 @@ import { rebuildLayout, type LayoutResult } from './layout/rebuild';
 import type { OcrPage } from './ocr/types';
 import {
   prepareImage,
+  isBlankCanvas,
   loadImage,
   makeThumbnail,
   type ImageQuality,
@@ -25,6 +26,30 @@ export const NEUTRAL_QUALITY: ImageQuality = {
   contrastBoosted: false,
 };
 
+export const EMPTY_PAGE: OcrPage = {
+  text: '',
+  confidence: 0,
+  blocks: [],
+  paragraphs: [],
+  lines: [],
+};
+
+/**
+ * Turns a recognised page into the Markdown the panel shows. Kept separate from
+ * recognition so a region edit can re-render an existing page without OCR.
+ */
+export function renderPage(
+  page: OcrPage,
+  options: PipelineOptions,
+): { markdown: string; rawText: string; stats: LayoutResult['stats'] } {
+  const layout = rebuildLayout(page);
+  return {
+    markdown: cleanOutput(layout.markdown, { compact: options.compact }),
+    rawText: (page.text ?? '').trim(),
+    stats: layout.stats,
+  };
+}
+
 export interface PipelineOutput {
   markdown: string;
   rawText: string;
@@ -38,6 +63,13 @@ export interface PipelineOutput {
   quality: ImageQuality;
   /** How many recognition passes ran (2 = a retry produced the chosen result). */
   passes: number;
+  /**
+   * The recognised page. It is kept so a keep/exclude edit can be applied to
+   * the text instead of reading the capture again.
+   */
+  page?: OcrPage;
+  /** Prepared pixels per captured pixel for `page`. */
+  scale?: number;
 }
 
 /** One captured tile of a full-page capture. */
@@ -86,6 +118,28 @@ export async function runPipeline(
   const height = image.naturalHeight;
 
   const prepared = prepareImage(image, options.maxWidth);
+
+  // Nothing to read: a stray click, a paste of an empty canvas or a blank
+  // stretch between sections. Skipping the pass keeps the worker idle.
+  if (isBlankCanvas(prepared.canvas)) {
+    onProgress('Done', 1);
+    return {
+      markdown: '',
+      rawText: '',
+      thumb: await makeThumbnail(source),
+      tokens: 0,
+      imageTokens: estimateImageTokens(width, height),
+      stats: rebuildLayout(EMPTY_PAGE).stats,
+      width,
+      height,
+      inverted: prepared.inverted,
+      quality: prepared.quality,
+      passes: 1,
+      page: EMPTY_PAGE,
+      scale: prepared.scale,
+    };
+  }
+
   const best = await recognizeBest(prepared, options, onProgress, 0.08, 0.8);
 
   onProgress('Counting tokens', 0.97);
@@ -106,6 +160,8 @@ export async function runPipeline(
     inverted: prepared.inverted,
     quality: prepared.quality,
     passes: best.passes,
+    page: best.page,
+    scale: prepared.scale,
   };
 }
 
@@ -149,6 +205,24 @@ export async function runTiledPipeline(
     drawTileIntoThumb(thumb, image, tile.offset, capture.dpr);
 
     const prepared = prepareImage(image, options.maxWidth);
+
+    if (isBlankCanvas(prepared.canvas)) {
+      // A blank stretch between sections costs nothing. The page still counts
+      // towards the preview and the offsets, it just holds no lines.
+      if (index === 0) {
+        quality = prepared.quality;
+        inverted = prepared.inverted;
+        width = image.naturalWidth;
+      }
+      recognitions.push({
+        page: EMPTY_PAGE,
+        offset: tile.offset,
+        scale: prepared.scale,
+        index,
+      });
+      continue;
+    }
+
     const best = await recognizeBest(
       prepared,
       options,
@@ -189,8 +263,8 @@ export async function runTiledPipeline(
 
   onProgress('Rebuilding layout', 0.93);
   const page = stitched.page;
-  const layout = rebuildLayout(page);
-  const markdown = cleanOutput(layout.markdown, { compact: options.compact });
+  const rendered = renderPage(page, options);
+  const { markdown } = rendered;
 
   onProgress('Counting tokens', 0.97);
   const tokens = await countTextTokens(markdown);
@@ -207,7 +281,7 @@ export async function runTiledPipeline(
       Math.max(1, Math.round(capture.viewportWidth * capture.dpr)),
       Math.max(1, Math.round(capture.scrollHeight * capture.dpr)),
     ),
-    stats: layout.stats,
+    stats: rendered.stats,
     width: Math.max(1, Math.round(width || capture.viewportWidth * capture.dpr)),
     height: Math.max(1, Math.round(capture.scrollHeight * capture.dpr)),
     inverted,

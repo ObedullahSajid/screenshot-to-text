@@ -1,6 +1,36 @@
 type Counter = (text: string) => number;
 
 let counter: Counter | null = null;
+let loading: Promise<Counter> | null = null;
+
+function loadCounter(): Promise<Counter> {
+  if (counter) return Promise.resolve(counter);
+  if (!loading) {
+    loading = import('gpt-tokenizer/model/gpt-4o')
+      .then((module) => {
+        counter = module.countTokens;
+        return counter;
+      })
+      .catch(() => {
+        // Fallback if the tokenizer fails to load: ~4 characters per token.
+        const fallback: Counter = (value: string) => Math.ceil(value.length / 4);
+        counter = fallback;
+        return fallback;
+      })
+      .finally(() => {
+        loading = null;
+      });
+  }
+  return loading;
+}
+
+/**
+ * Loads the ~1.5 MB GPT-4o vocabulary while the panel is idle, so the first
+ * result does not pay for parsing it on the critical path.
+ */
+export function warmTokenizer(): Promise<void> {
+  return loadCounter().then(() => undefined);
+}
 
 /**
  * Exact-ish token count with the GPT-4o (o200k) vocabulary. Loaded lazily so the
@@ -8,16 +38,8 @@ let counter: Counter | null = null;
  */
 export async function countTextTokens(text: string): Promise<number> {
   if (!text.trim()) return 0;
-  if (!counter) {
-    try {
-      const module = await import('gpt-tokenizer/model/gpt-4o');
-      counter = module.countTokens;
-    } catch {
-      // Fallback if the tokenizer fails to load: ~4 characters per token.
-      counter = (value: string) => Math.ceil(value.length / 4);
-    }
-  }
-  return counter(text);
+  const count = await loadCounter();
+  return count(text);
 }
 
 /**
