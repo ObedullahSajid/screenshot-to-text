@@ -35,6 +35,35 @@ function check(label, passed) {
   console.log(`${passed ? 'PASS' : 'FAIL'}  ${label}`);
 }
 
+/**
+ * Opens the region editor from the result toolbar.
+ *
+ * The pointer click is measured and then dispatched, so a result view that
+ * reflows in between can swallow it. That showed up once on a slow CI runner:
+ * the click did nothing and a 3 s wait gave up. Try the real click first, then
+ * fall back to the same DOM click `clickSelector` uses for covered controls.
+ */
+async function openRegionEditor(page) {
+  await clickSelector(page, '[aria-label="Select regions"]');
+  const opened = await page
+    .waitForSelector('.region-card', { timeout: 10_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (opened) return true;
+
+  console.log('region editor did not open from the pointer click; clicking through the DOM');
+  const clicked = await page.evaluate(() => {
+    const button = document.querySelector('[aria-label="Select regions"]');
+    button?.click();
+    return Boolean(button);
+  });
+  if (!clicked) return false;
+  return page
+    .waitForSelector('.region-card', { timeout: 3_000 })
+    .then(() => true)
+    .catch(() => false);
+}
+
 const externalRequests = new Set();
 const session = await launch({ headless: process.env.HEADFUL !== '1' });
 
@@ -188,11 +217,7 @@ try {
 
   check('quality metrics recorded', Number(codeMeta.sharpness) > 0);
 
-  await clickSelector(page, '[aria-label="Select regions"]');
-  const regionsOpened = await page
-    .waitForSelector('.region-card', { timeout: 3_000 })
-    .then(() => true)
-    .catch(() => false);
+  const regionsOpened = await openRegionEditor(page);
 
   if (regionsOpened) {
     check(
@@ -371,8 +396,7 @@ try {
     await page.mouse.up();
   };
 
-  await clickSelector(page, '[aria-label="Select regions"]');
-  await page.waitForSelector('.region-card', { timeout: 3_000 });
+  if (!(await openRegionEditor(page))) throw new Error('The region editor did not open.');
   await clickSelector(page, '.region-mode[data-mode="exclude"]');
   await dragOnFrame(0.04, 0.02, 0.96, 0.33);
   await page.waitForSelector('.region-box--exclude', { timeout: 2_000 });
@@ -403,8 +427,7 @@ try {
   );
 
   // A keep box is the mirror case: only the selected area is read.
-  await clickSelector(page, '[aria-label="Select regions"]');
-  await page.waitForSelector('.region-card', { timeout: 3_000 });
+  if (!(await openRegionEditor(page))) throw new Error('The region editor did not open.');
   await clickSelector(page, '[data-action="reset"]');
   await clickSelector(page, '.region-mode[data-mode="keep"]');
   await dragOnFrame(0.04, 0.38, 0.96, 0.95);
